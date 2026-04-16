@@ -8,6 +8,7 @@ describe('Type Definitions', () => {
       name: 'Test Provider',
       baseUrl: 'https://api.test.com',
       apiKey: 'test-key',
+      model: 'gpt-3.5-turbo',
       isActive: true,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -26,6 +27,7 @@ describe('Type Definitions', () => {
       name: 'Test Provider',
       baseUrl: 'https://api.test.com',
       apiKey: 'test-key',
+      model: 'gpt-3.5-turbo',
       isActive: true,
       testStatus,
       createdAt: Date.now(),
@@ -52,6 +54,7 @@ describe('Type Definitions', () => {
           name: 'Test',
           baseUrl: 'https://api.test.com',
           apiKey: 'test-key',
+          model: 'gpt-3.5-turbo',
         },
       ],
     }

@@ -47,6 +47,7 @@ describe('Storage Utility', () => {
       name: 'Test Provider',
       baseUrl: 'https://api.test.com',
       apiKey: 'test-key',
+      model: 'gpt-3.5-turbo',
       isActive: false,
     }
     const result = await addProvider(provider)
@@ -61,6 +62,7 @@ describe('Storage Utility', () => {
       name: 'Test',
       baseUrl: 'https://api.test.com',
       apiKey: 'test-key',
+      model: 'gpt-3.5-turbo',
       isActive: false,
     })
     const updated = await updateProvider(provider.id, { name: 'Updated' })
@@ -73,6 +75,7 @@ describe('Storage Utility', () => {
       name: 'Test',
       baseUrl: 'https://api.test.com',
       apiKey: 'test-key',
+      model: 'gpt-3.5-turbo',
       isActive: false,
     })
     await deleteProvider(provider.id)
@@ -85,12 +88,14 @@ describe('Storage Utility', () => {
       name: 'Provider 1',
       baseUrl: 'https://api.test.com',
       apiKey: 'test-key',
+      model: 'gpt-3.5-turbo',
       isActive: false,
     })
     const provider2 = await addProvider({
       name: 'Provider 2',
       baseUrl: 'https://api.test.com',
       apiKey: 'test-key',
+      model: 'gpt-3.5-turbo',
       isActive: false,
     })
     await setActiveProvider(provider1.id)

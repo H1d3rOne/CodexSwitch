@@ -88,7 +88,7 @@ async function handleSetActiveProvider(id: string): Promise<MessageResponse> {
 }
 
 async function handleTestProvider(provider: Provider): Promise<MessageResponse<TestResult>> {
-  const result = await testProviderConnection(provider.baseUrl, provider.apiKey)
+  const result = await testProviderConnection(provider.baseUrl, provider.apiKey, provider.model)
 
   await updateProvider(provider.id, {
     testStatus: {

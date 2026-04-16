@@ -9,6 +9,7 @@ export interface Provider {
   name: string
   baseUrl: string
   apiKey: string
+  model: string
   isActive: boolean
   testStatus?: TestStatus
   createdAt: number
@@ -27,6 +28,7 @@ export interface ExportData {
     name: string
     baseUrl: string
     apiKey: string
+    model: string
   }>
 }
 

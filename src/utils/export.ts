@@ -8,6 +8,7 @@ export function exportProviders(providers: Provider[]): ExportData {
       name: p.name,
       baseUrl: p.baseUrl,
       apiKey: p.apiKey,
+      model: p.model,
     })),
   }
 }
@@ -59,6 +60,7 @@ export function importProviders(data: ExportData): Array<Omit<Provider, 'id' | '
     name: p.name,
     baseUrl: p.baseUrl,
     apiKey: p.apiKey,
+    model: p.model || 'gpt-3.5-turbo',
     isActive: false,
   }))
 }

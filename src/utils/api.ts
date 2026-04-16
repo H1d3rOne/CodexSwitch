@@ -2,7 +2,8 @@ import type { TestResult } from '../types'
 
 export async function testProviderConnection(
   baseUrl: string,
-  apiKey: string
+  apiKey: string,
+  model: string = 'gpt-3.5-turbo'
 ): Promise<TestResult> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 10000)
@@ -19,7 +20,7 @@ export async function testProviderConnection(
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
+        model,
         messages: [{ role: 'user', content: 'Hi' }],
         max_tokens: 10,
       }),

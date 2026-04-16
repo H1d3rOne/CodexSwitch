@@ -9,6 +9,7 @@ describe('Export Utility', () => {
       name: 'Provider 1',
       baseUrl: 'https://api.test1.com',
       apiKey: 'key1',
+      model: 'gpt-3.5-turbo',
       isActive: true,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -18,6 +19,7 @@ describe('Export Utility', () => {
       name: 'Provider 2',
       baseUrl: 'https://api.test2.com',
       apiKey: 'key2',
+      model: 'gpt-4',
       isActive: false,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -43,6 +45,7 @@ describe('Export Utility', () => {
           name: 'Test',
           baseUrl: 'https://api.test.com',
           apiKey: 'test-key',
+          model: 'gpt-3.5-turbo',
         },
       ],
     }
@@ -73,6 +76,7 @@ describe('Export Utility', () => {
           name: 'Imported Provider',
           baseUrl: 'https://api.imported.com',
           apiKey: 'imported-key',
+          model: 'gpt-4',
         },
       ],
     }
