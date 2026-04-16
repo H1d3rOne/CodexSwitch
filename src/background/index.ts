@@ -9,6 +9,16 @@ import {
 import { testProviderConnection } from '../utils/api'
 import { exportProviders, validateExportData, importProviders } from '../utils/export'
 
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.sidePanel.setOptions({ path: 'sidepanel.html' })
+})
+
+chrome.action.onClicked.addListener((tab) => {
+  if (tab.id) {
+    chrome.sidePanel.open({ tabId: tab.id })
+  }
+})
+
 chrome.runtime.onMessage.addListener(
   (message: Message, _sender, sendResponse) => {
     handleMessage(message).then(sendResponse)
