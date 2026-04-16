@@ -1,6 +1,7 @@
 export interface TestStatus {
   lastTestTime: number
   isSuccess: boolean
+  statusCode?: number
   errorMessage?: string
 }
 
@@ -34,6 +35,7 @@ export interface ExportData {
 
 export interface TestResult {
   success: boolean
+  statusCode?: number
   message: string
   error?: string
 }

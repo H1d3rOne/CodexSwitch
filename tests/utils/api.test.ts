@@ -4,74 +4,61 @@ import { testProviderConnection } from '../../src/utils/api'
 global.fetch = vi.fn()
 
 describe('API Utility', () => {
-  it('should return success for valid API response', async () => {
+  it('should return success with statusCode 200', async () => {
     (fetch as any).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({ choices: [{ message: { content: 'Hello!' } }] }),
     })
 
-    const result = await testProviderConnection(
-      'https://api.test.com',
-      'test-key'
-    )
+    const result = await testProviderConnection('https://api.test.com', 'test-key')
     expect(result.success).toBe(true)
-    expect(result.message).toContain('Connection successful')
+    expect(result.statusCode).toBe(200)
+    expect(result.message).toBe('200')
   })
 
-  it('should return error for 401 response', async () => {
+  it('should return error with statusCode 401', async () => {
     (fetch as any).mockResolvedValueOnce({
       ok: false,
       status: 401,
       statusText: 'Unauthorized',
     })
 
-    const result = await testProviderConnection(
-      'https://api.test.com',
-      'invalid-key'
-    )
+    const result = await testProviderConnection('https://api.test.com', 'invalid-key')
     expect(result.success).toBe(false)
-    expect(result.error).toContain('Invalid API Key')
+    expect(result.statusCode).toBe(401)
   })
 
-  it('should return error for network failure', async () => {
-    (fetch as any).mockRejectedValueOnce(new Error('Network error'))
-
-    const result = await testProviderConnection(
-      'https://api.test.com',
-      'test-key'
-    )
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('Connection failed')
-  })
-
-  it('should return error for 403 response', async () => {
+  it('should return error with statusCode 403', async () => {
     (fetch as any).mockResolvedValueOnce({
       ok: false,
       status: 403,
       statusText: 'Forbidden',
     })
 
-    const result = await testProviderConnection(
-      'https://api.test.com',
-      'test-key'
-    )
+    const result = await testProviderConnection('https://api.test.com', 'test-key')
     expect(result.success).toBe(false)
-    expect(result.error).toContain('Insufficient quota')
+    expect(result.statusCode).toBe(403)
   })
 
-  it('should return error for 500 response', async () => {
+  it('should return error with statusCode 500', async () => {
     (fetch as any).mockResolvedValueOnce({
       ok: false,
       status: 500,
       statusText: 'Internal Server Error',
     })
 
-    const result = await testProviderConnection(
-      'https://api.test.com',
-      'test-key'
-    )
+    const result = await testProviderConnection('https://api.test.com', 'test-key')
     expect(result.success).toBe(false)
-    expect(result.error).toContain('Server error')
+    expect(result.statusCode).toBe(500)
+  })
+
+  it('should return error without statusCode for network failure', async () => {
+    (fetch as any).mockRejectedValueOnce(new Error('Network error'))
+
+    const result = await testProviderConnection('https://api.test.com', 'test-key')
+    expect(result.success).toBe(false)
+    expect(result.statusCode).toBeUndefined()
+    expect(result.message).toBe('Error')
   })
 })

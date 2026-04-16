@@ -94,6 +94,7 @@ async function handleTestProvider(provider: Provider): Promise<MessageResponse<T
     testStatus: {
       lastTestTime: Date.now(),
       isSuccess: result.success,
+      statusCode: result.statusCode,
       errorMessage: result.error,
     },
   })
