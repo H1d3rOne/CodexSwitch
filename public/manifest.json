@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "CodexSwitch",
+  "version": "1.0.0",
+  "description": "OpenAI API Provider Manager - 管理多个 OpenAI 兼容 API 供应商",
+  "permissions": ["storage"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}
