@@ -1,21 +1,39 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
+import { copyFileSync, mkdirSync, rmSync } from 'fs'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'copy-assets',
+      closeBundle() {
+        const distDir = resolve(__dirname, 'dist')
+        mkdirSync(distDir, { recursive: true })
+        copyFileSync(
+          resolve(__dirname, 'public/manifest.json'),
+          resolve(distDir, 'manifest.json')
+        )
+        copyFileSync(
+          resolve(__dirname, 'public/icon.png'),
+          resolve(distDir, 'icon.png')
+        )
+        rmSync(resolve(distDir, 'public'), { recursive: true, force: true })
+      },
+    },
+  ],
   build: {
     outDir: 'dist',
     rollupOptions: {
       input: {
-        popup: resolve(__dirname, 'public/popup.html'),
-        options: resolve(__dirname, 'public/options.html'),
-        background: resolve(__dirname, 'src/background/index.ts'),
+        popup: resolve(__dirname, 'popup.html'),
+        options: resolve(__dirname, 'options.html'),
       },
       output: {
-        entryFileNames: '[name].js',
-        chunkFileNames: 'chunks/[name].js',
-        assetFileNames: 'assets/[name].[ext]',
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'chunks/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash].[ext]',
       },
     },
   },
