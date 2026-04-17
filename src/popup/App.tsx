@@ -715,75 +715,77 @@ export function App() {
             </button>
           </div>
 
-          <form onSubmit={handleSave} className="flex-1 flex flex-col gap-2.5">
-            <div>
-              <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">Name</label>
-              <input type="text" value={formName} onChange={e => setFormName(e.target.value)}
-                className="w-full px-3 py-1.5 text-[12px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
-                placeholder="OpenAI" required />
-            </div>
-
-            <div>
-              <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">Base URL</label>
-              <input type="url" value={formBaseUrl} onChange={e => setFormBaseUrl(e.target.value)}
-                className="w-full px-3 py-1.5 text-[12px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
-                placeholder="https://api.openai.com" required />
-            </div>
-
-            <div>
-              <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">API Key</label>
-              <div className="flex gap-1.5">
-                <input type={showApiKey ? 'text' : 'password'} value={formApiKey} onChange={e => setFormApiKey(e.target.value)}
-                  className="flex-1 px-3 py-1.5 text-[12px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
-                  placeholder="sk-..." />
-                <button type="button" onClick={() => setShowApiKey(!showApiKey)}
-                  className="px-2 py-1.5 text-[9px] font-semibold text-slate-400 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors uppercase tracking-wider">
-                  {showApiKey ? 'HIDE' : 'SHOW'}
-                </button>
+          <form onSubmit={handleSave} className="flex-1 flex flex-col gap-2.5 min-h-0">
+            <div className="flex-1 overflow-y-auto flex flex-col gap-2.5 min-h-0">
+              <div>
+                <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">Name</label>
+                <input type="text" value={formName} onChange={e => setFormName(e.target.value)}
+                  className="w-full px-3 py-1.5 text-[12px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
+                  placeholder="OpenAI" required />
               </div>
-            </div>
 
-            <div>
-              <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">Models</label>
-              <div className="space-y-1">
-                {formModels.length === 0 && (
-                  <div className="text-[10px] text-slate-400 py-2 text-center">Add at least one model</div>
-                )}
-                {formModels.map((m, i) => (
-                  <div key={i} className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setFormTestModel(m)}
-                      className={`flex-1 px-3 py-1.5 text-[11px] font-mono border rounded-lg text-left transition-all ${
-                        m === formTestModel
-                          ? 'border-emerald-400 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
-                          : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
-                      }`}
-                    >
-                      {m}{i === 0 && <span className="text-[8px] text-blue-400 ml-1">default</span>}
-                    </button>
-                    {formModels.length > 1 && (
-                      <button type="button" onClick={() => removeFormModel(m)}
-                        className="w-5 h-5 flex items-center justify-center rounded hover:bg-red-50 transition-colors">
-                        <svg className="w-2.5 h-2.5 text-slate-300" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-                      </button>
-                    )}
-                  </div>
-                ))}
+              <div>
+                <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">Base URL</label>
+                <input type="url" value={formBaseUrl} onChange={e => setFormBaseUrl(e.target.value)}
+                  className="w-full px-3 py-1.5 text-[12px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
+                  placeholder="https://api.openai.com" required />
+              </div>
+
+              <div>
+                <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">API Key</label>
                 <div className="flex gap-1.5">
-                  <input type="text" value={formNewModel} onChange={e => setFormNewModel(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addFormModel() } }}
-                    className="flex-1 px-3 py-1.5 text-[11px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
-                    placeholder="Add model..." />
-                  <button type="button" onClick={addFormModel} disabled={!formNewModel.trim()}
-                    className="w-7 h-7 flex items-center justify-center rounded-lg bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-30 transition-colors shrink-0">
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+                  <input type={showApiKey ? 'text' : 'password'} value={formApiKey} onChange={e => setFormApiKey(e.target.value)}
+                    className="flex-1 px-3 py-1.5 text-[12px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
+                    placeholder="sk-..." />
+                  <button type="button" onClick={() => setShowApiKey(!showApiKey)}
+                    className="px-2 py-1.5 text-[9px] font-semibold text-slate-400 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors uppercase tracking-wider">
+                    {showApiKey ? 'HIDE' : 'SHOW'}
                   </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">Models</label>
+                <div className="space-y-1">
+                  {formModels.length === 0 && (
+                    <div className="text-[10px] text-slate-400 py-2 text-center">Add at least one model</div>
+                  )}
+                  {formModels.map((m, i) => (
+                    <div key={i} className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setFormTestModel(m)}
+                        className={`flex-1 px-3 py-1.5 text-[11px] font-mono border rounded-lg text-left transition-all ${
+                          m === formTestModel
+                            ? 'border-emerald-400 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                        }`}
+                      >
+                        {m}{i === 0 && <span className="text-[8px] text-blue-400 ml-1">default</span>}
+                      </button>
+                      {formModels.length > 1 && (
+                        <button type="button" onClick={() => removeFormModel(m)}
+                          className="w-5 h-5 flex items-center justify-center rounded hover:bg-red-50 transition-colors">
+                          <svg className="w-2.5 h-2.5 text-slate-300" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <div className="flex gap-1.5">
+                    <input type="text" value={formNewModel} onChange={e => setFormNewModel(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addFormModel() } }}
+                      className="flex-1 px-3 py-1.5 text-[11px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
+                      placeholder="Add model..." />
+                    <button type="button" onClick={addFormModel} disabled={!formNewModel.trim()}
+                      className="w-7 h-7 flex items-center justify-center rounded-lg bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-30 transition-colors shrink-0">
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="mt-auto flex flex-col gap-2">
+            <div className="shrink-0 flex flex-col gap-2 pt-2 border-t border-slate-200/60">
               {formTestResult && (
                 <div className="rounded-lg bg-white ring-1 ring-slate-200/60 overflow-hidden">
                   <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-100">
