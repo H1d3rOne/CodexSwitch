@@ -3,7 +3,7 @@
   "name": "CodexSwitch",
   "version": "1.0.0",
   "description": "OpenAI API Provider Manager - 管理多个 OpenAI 兼容 API 供应商",
-  "permissions": ["storage", "sidePanel", "nativeMessaging", "proxy"],
+  "permissions": ["storage", "sidePanel", "nativeMessaging"],
   "background": {
     "service_worker": "background.js"
   },

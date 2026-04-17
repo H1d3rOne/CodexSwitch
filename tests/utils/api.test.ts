@@ -1,9 +1,12 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { testProviderConnection } from '../../src/utils/api'
 
 global.fetch = vi.fn()
 
 describe('API Utility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
   it('should return success with statusCode 200', async () => {
     (fetch as any).mockResolvedValueOnce({
       ok: true,
@@ -55,6 +58,40 @@ describe('API Utility', () => {
     const result = await testProviderConnection('https://api.test.com', 'test-key')
     expect(result.success).toBe(false)
     expect(result.statusCode).toBe(500)
+  })
+
+
+
+  it('should retry with /v1 and return correctedBaseUrl when first 200 response is not valid JSON', async () => {
+    ;(fetch as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '<html>ok</html>',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ choices: [{ message: { content: 'Hello from v1!' } }] }),
+      })
+
+    const result = await testProviderConnection('https://api.test.com', 'test-key')
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      'https://api.test.com/chat/completions',
+      expect.objectContaining({ method: 'POST' })
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://api.test.com/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' })
+    )
+    expect(result).toMatchObject({
+      success: true,
+      statusCode: 200,
+      correctedBaseUrl: 'https://api.test.com/v1',
+    })
   })
 
   it('should return error without statusCode for network failure', async () => {

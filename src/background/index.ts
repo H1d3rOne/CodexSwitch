@@ -23,11 +23,6 @@ chrome.action.onClicked.addListener((tab) => {
   if (tab.id) chrome.sidePanel.open({ tabId: tab.id })
 })
 
-async function getProxyUrl(): Promise<string | undefined> {
-  const res = await chrome.storage.local.get('proxy_url')
-  return res.proxy_url || undefined
-}
-
 chrome.runtime.onMessage.addListener(
   (message: Message, _sender, sendResponse) => {
     handleMessage(message).then(sendResponse)
@@ -39,8 +34,7 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'chat-stream') {
     port.onMessage.addListener(async (msg: { baseUrl: string; apiKey: string; model: string; messages: ChatMessage[] }) => {
       try {
-        const proxyUrl = await getProxyUrl()
-        for await (const chunk of streamChat(msg.baseUrl, msg.apiKey, msg.model, msg.messages, proxyUrl)) {
+        for await (const chunk of streamChat(msg.baseUrl, msg.apiKey, msg.model, msg.messages)) {
           port.postMessage({ type: 'chunk', data: chunk })
         }
         port.postMessage({ type: 'done' })
@@ -69,11 +63,8 @@ async function handleMessage(message: Message): Promise<MessageResponse> {
       case 'SET_ACTIVE_PROVIDER':
         return handleSetActiveProvider(message.payload as { id: string; sync?: boolean })
 
-      case 'TEST_PROVIDER': {
-        const provider = message.payload as Provider
-        const proxyUrl = await getProxyUrl()
-        return handleTestProvider(provider, proxyUrl)
-      }
+      case 'TEST_PROVIDER':
+        return handleTestProvider(message.payload as Provider)
 
       case 'UPDATE_TEST_STATUS':
         return handleUpdateTestStatus(message.payload as { id: string; result: TestResult })
@@ -148,8 +139,8 @@ async function handleSetActiveProvider(payload: { id: string; sync?: boolean }):
   return { success: true }
 }
 
-async function handleTestProvider(provider: Provider, proxyUrl?: string): Promise<MessageResponse<TestResult>> {
-  const result = await testProviderConnection(provider.baseUrl, provider.apiKey, provider.model, proxyUrl)
+async function handleTestProvider(provider: Provider): Promise<MessageResponse<TestResult>> {
+  const result = await testProviderConnection(provider.baseUrl, provider.apiKey, provider.model)
 
   await updateProvider(provider.id, {
     testStatus: {

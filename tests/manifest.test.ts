@@ -13,4 +13,12 @@ describe('extension manifest', () => {
 
     expect(manifest.permissions).toContain('nativeMessaging')
   })
+
+  it('does not request proxy permission when following browser proxy', () => {
+    const manifest = JSON.parse(
+      readFileSync(path.join(projectRoot, 'public', 'manifest.json'), 'utf8')
+    ) as { permissions?: string[] }
+
+    expect(manifest.permissions).not.toContain('proxy')
+  })
 })
