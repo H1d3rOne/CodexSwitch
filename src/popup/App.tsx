@@ -413,6 +413,26 @@ export function App() {
                 )}
                 Test All
               </button>
+              {selectMode ? (
+                <>
+                  <button onClick={toggleSelectAll} className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold text-slate-500 bg-slate-50 hover:bg-slate-100 ring-1 ring-slate-200/60 transition-colors">
+                    {selectedIds.size === providers.length ? 'Deselect' : 'All'}
+                  </button>
+                  {selectedIds.size > 0 && (
+                    <button onClick={handleDeleteSelected} className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold text-red-500 bg-red-50 hover:bg-red-100 ring-1 ring-red-200/60 transition-colors">
+                      Del ({selectedIds.size})
+                    </button>
+                  )}
+                  <button onClick={exitSelectMode} className="w-5 h-5 flex items-center justify-center rounded hover:bg-slate-200 transition-colors">
+                    <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                </>
+              ) : (
+                <button onClick={() => setSelectMode(true)} className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold text-slate-500 bg-slate-50 hover:bg-slate-100 ring-1 ring-slate-200/60 transition-colors">
+                  <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  Select
+                </button>
+              )}
               <div className="flex items-center gap-1 ml-auto">
                 <span className="text-[8px] font-semibold text-slate-400 uppercase tracking-wider">Sync</span>
                 <button
@@ -425,26 +445,6 @@ export function App() {
                   <span className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow-sm transition-transform duration-200 ${syncEnabled ? 'translate-x-4' : ''}`} />
                 </button>
               </div>
-              {selectMode ? (
-                <>
-                  <button onClick={toggleSelectAll} className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold text-slate-500 bg-slate-50 hover:bg-slate-100 ring-1 ring-slate-200/60 transition-colors">
-                    {selectedIds.size === providers.length ? 'Deselect' : 'All'}
-                  </button>
-                  {selectedIds.size > 0 && (
-                    <button onClick={handleDeleteSelected} className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold text-red-500 bg-red-50 hover:bg-red-100 ring-1 ring-red-200/60 transition-colors">
-                      Del ({selectedIds.size})
-                    </button>
-                  )}
-                  <button onClick={exitSelectMode} className="ml-auto w-5 h-5 flex items-center justify-center rounded hover:bg-slate-200 transition-colors">
-                    <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-                  </button>
-                </>
-              ) : (
-                <button onClick={() => setSelectMode(true)} className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold text-slate-500 bg-slate-50 hover:bg-slate-100 ring-1 ring-slate-200/60 transition-colors">
-                  <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  Select
-                </button>
-              )}
             </div>
           )}
 
