@@ -3,6 +3,7 @@ export interface TestStatus {
   isSuccess: boolean
   statusCode?: number
   errorMessage?: string
+  responseBody?: string
 }
 
 export interface Provider {
@@ -11,6 +12,7 @@ export interface Provider {
   baseUrl: string
   apiKey: string
   model: string
+  models: string[]
   isActive: boolean
   testStatus?: TestStatus
   createdAt: number
@@ -30,6 +32,7 @@ export interface ExportData {
     baseUrl: string
     apiKey: string
     model: string
+    models: string[]
   }>
 }
 
@@ -38,6 +41,22 @@ export interface TestResult {
   statusCode?: number
   message: string
   error?: string
+  responseBody?: string
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+}
+
+export interface ChatSession {
+  id: string
+  title: string
+  providerId: string
+  model: string
+  messages: ChatMessage[]
+  createdAt: number
+  updatedAt: number
 }
 
 export type MessageType =
@@ -49,6 +68,10 @@ export type MessageType =
   | 'TEST_PROVIDER'
   | 'EXPORT_PROVIDERS'
   | 'IMPORT_PROVIDERS'
+  | 'GET_CHAT_SESSIONS'
+  | 'SAVE_CHAT_SESSION'
+  | 'DELETE_CHAT_SESSION'
+  | 'SET_ACTIVE_SESSION'
 
 export interface Message {
   type: MessageType

@@ -8,13 +8,14 @@ describe('API Utility', () => {
     (fetch as any).mockResolvedValueOnce({
       ok: true,
       status: 200,
-      json: async () => ({ choices: [{ message: { content: 'Hello!' } }] }),
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'Hello!' } }] }),
     })
 
     const result = await testProviderConnection('https://api.test.com', 'test-key')
     expect(result.success).toBe(true)
     expect(result.statusCode).toBe(200)
     expect(result.message).toBe('200')
+    expect(result.responseBody).toBeDefined()
   })
 
   it('should return error with statusCode 401', async () => {
@@ -22,6 +23,7 @@ describe('API Utility', () => {
       ok: false,
       status: 401,
       statusText: 'Unauthorized',
+      text: async () => '{"error":"Unauthorized"}',
     })
 
     const result = await testProviderConnection('https://api.test.com', 'invalid-key')
@@ -34,6 +36,7 @@ describe('API Utility', () => {
       ok: false,
       status: 403,
       statusText: 'Forbidden',
+      text: async () => '{"error":"Forbidden"}',
     })
 
     const result = await testProviderConnection('https://api.test.com', 'test-key')
@@ -46,6 +49,7 @@ describe('API Utility', () => {
       ok: false,
       status: 500,
       statusText: 'Internal Server Error',
+      text: async () => '{"error":"Internal Server Error"}',
     })
 
     const result = await testProviderConnection('https://api.test.com', 'test-key')

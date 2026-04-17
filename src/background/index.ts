@@ -1,4 +1,4 @@
-import type { Message, MessageResponse, Provider, TestResult } from '../types'
+import type { Message, MessageResponse, Provider, TestResult, ChatMessage, ChatSession } from '../types'
 import {
   getProviders,
   addProvider,
@@ -8,6 +8,14 @@ import {
 } from '../utils/storage'
 import { testProviderConnection } from '../utils/api'
 import { exportProviders, validateExportData, importProviders } from '../utils/export'
+import {
+  getChatSessions,
+  getActiveSessionId,
+  setActiveSessionId,
+  saveChatSession,
+  deleteChatSession,
+} from '../utils/chat'
+import { updateCodexSystemForProvider } from '../utils/systemConfig'
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setOptions({ path: 'sidepanel.html' })
@@ -53,6 +61,18 @@ async function handleMessage(message: Message): Promise<MessageResponse> {
       case 'IMPORT_PROVIDERS':
         return handleImportProviders(message.payload as unknown)
 
+      case 'GET_CHAT_SESSIONS':
+        return handleGetChatSessions()
+
+      case 'SAVE_CHAT_SESSION':
+        return handleSaveChatSession(message.payload as { id: string | null; providerId: string; model: string; messages: ChatMessage[] })
+
+      case 'DELETE_CHAT_SESSION':
+        return handleDeleteChatSession(message.payload as string)
+
+      case 'SET_ACTIVE_SESSION':
+        return handleSetActiveSession(message.payload as string)
+
       default:
         return { success: false, error: 'Unknown message type' }
     }
@@ -94,6 +114,20 @@ async function handleDeleteProvider(id: string): Promise<MessageResponse> {
 
 async function handleSetActiveProvider(id: string): Promise<MessageResponse> {
   await setActiveProvider(id)
+  // After selecting a provider, attempt to sync Codex system configuration
+  // with the newly active provider. This leverages a native host when available
+  // to write to the system Codex configuration. Fallbacks to a local store if the
+  // native host isn't installed.
+  try {
+    const providers = await getProviders()
+    const current = providers.find(p => p.id === id)
+    if (current) {
+      await updateCodexSystemForProvider(current)
+    }
+  } catch (e) {
+    // Non-fatal: don't block provider switching if sync fails
+    console.warn('Codex system config sync failed', e)
+  }
   return { success: true }
 }
 
@@ -106,6 +140,7 @@ async function handleTestProvider(provider: Provider): Promise<MessageResponse<T
       isSuccess: result.success,
       statusCode: result.statusCode,
       errorMessage: result.error,
+      responseBody: result.responseBody,
     },
   })
 
@@ -129,5 +164,31 @@ async function handleImportProviders(data: unknown): Promise<MessageResponse> {
     await addProvider(provider)
   }
 
+  return { success: true }
+}
+
+async function handleGetChatSessions(): Promise<MessageResponse<{ sessions: ChatSession[]; activeId: string | null }>> {
+  const sessions = await getChatSessions()
+  const activeId = await getActiveSessionId()
+  return { success: true, data: { sessions, activeId } }
+}
+
+async function handleSaveChatSession(payload: {
+  id: string | null
+  providerId: string
+  model: string
+  messages: ChatMessage[]
+}): Promise<MessageResponse<ChatSession>> {
+  const session = await saveChatSession(payload.id, payload.providerId, payload.model, payload.messages)
+  return { success: true, data: session }
+}
+
+async function handleDeleteChatSession(id: string): Promise<MessageResponse> {
+  await deleteChatSession(id)
+  return { success: true }
+}
+
+async function handleSetActiveSession(id: string): Promise<MessageResponse> {
+  await setActiveSessionId(id)
   return { success: true }
 }
