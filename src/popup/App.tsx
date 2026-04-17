@@ -180,7 +180,7 @@ export function App() {
 
   async function handleTestAll() {
     setTestingAll(true)
-    for (const p of providers) await sendMessage('TEST_PROVIDER', p)
+    await Promise.all(providers.map(p => sendMessage('TEST_PROVIDER', p)))
     await loadProviders()
     setTestingAll(false)
   }
