@@ -799,30 +799,30 @@ export function App() {
             </button>
           </div>
 
-          <form onSubmit={handleSave} className="flex-1 flex flex-col gap-2.5 min-h-0">
-            <div className="flex-1 overflow-y-auto flex flex-col gap-2.5 min-h-0">
+          <form onSubmit={handleSave} className="flex-1 flex flex-col gap-3 min-h-0">
+            <div className="flex-1 overflow-y-auto flex flex-col gap-3 min-h-0">
               <div>
-                <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">Name</label>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">Name</label>
                 <input type="text" value={formName} onChange={e => setFormName(e.target.value)}
-                  className="w-full px-3 py-1.5 text-[12px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
+                  className="w-full px-3 py-1.5 text-[12px] bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-400"
                   placeholder="OpenAI" required />
               </div>
 
               <div>
-                <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">Base URL</label>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">Base URL</label>
                 <input type="url" value={formBaseUrl} onChange={e => setFormBaseUrl(e.target.value)}
-                  className="w-full px-3 py-1.5 text-[12px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
+                  className="w-full px-3 py-1.5 text-[12px] font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-400"
                   placeholder="https://api.openai.com/v1" required />
               </div>
 
               <div>
-                <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">API Key</label>
-                <div className="flex gap-1.5">
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">API Key</label>
+                <div className="relative">
                   <input type={showApiKey ? 'text' : 'password'} value={formApiKey} onChange={e => setFormApiKey(e.target.value)}
-                    className="flex-1 px-3 py-1.5 text-[12px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
+                    className="w-full px-3 py-1.5 pr-8 text-[12px] font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-400"
                     placeholder="sk-..." />
                   <button type="button" onClick={() => setShowApiKey(!showApiKey)}
-                    className="px-2 py-1.5 text-slate-400 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-slate-600 transition-colors">
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors">
                     {showApiKey ? (
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" /></svg>
                     ) : (
@@ -833,7 +833,7 @@ export function App() {
               </div>
 
               <div>
-                <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">Models</label>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">Models</label>
                 <div className="space-y-1">
                   {formModels.length === 0 && (
                     <div className="text-[10px] text-slate-400 py-2 text-center">Add at least one model</div>
@@ -846,7 +846,7 @@ export function App() {
                         className={`flex-1 px-3 py-1.5 text-[11px] font-mono border rounded-lg text-left transition-all ${
                           m === formTestModel
                             ? 'border-emerald-400 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
-                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                            : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
                         }`}
                       >
                         {m}{i === 0 && <span className="text-[8px] text-blue-400 ml-1">default</span>}
@@ -862,7 +862,7 @@ export function App() {
                   <div className="flex gap-1.5">
                     <input type="text" value={formNewModel} onChange={e => setFormNewModel(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addFormModel() } }}
-                      className="flex-1 px-3 py-1.5 text-[11px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
+                      className="flex-1 px-3 py-1.5 text-[11px] font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-400"
                       placeholder="Add model..." />
                     <button type="button" onClick={addFormModel} disabled={!formNewModel.trim()}
                       className="w-7 h-7 flex items-center justify-center rounded-lg bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-30 transition-colors shrink-0">
