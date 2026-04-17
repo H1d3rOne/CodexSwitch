@@ -796,7 +796,7 @@ export function App() {
                 <label className="block text-[9px] font-semibold text-slate-400 mb-1 uppercase tracking-widest">Base URL</label>
                 <input type="url" value={formBaseUrl} onChange={e => setFormBaseUrl(e.target.value)}
                   className="w-full px-3 py-1.5 text-[12px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-300"
-                  placeholder="https://api.openai.com" required />
+                  placeholder="https://api.openai.com/v1" required />
               </div>
 
               <div>

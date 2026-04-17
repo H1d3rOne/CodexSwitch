@@ -15,8 +15,8 @@ export async function testProviderConnection(
 
   try {
     const url = baseUrl.endsWith('/')
-      ? `${baseUrl}v1/chat/completions`
-      : `${baseUrl}/v1/chat/completions`
+      ? `${baseUrl}chat/completions`
+      : `${baseUrl}/chat/completions`
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -67,8 +67,8 @@ export async function* streamChat(
   messages: ChatMessage[]
 ): AsyncGenerator<string, void, unknown> {
   const url = baseUrl.endsWith('/')
-    ? `${baseUrl}v1/chat/completions`
-    : `${baseUrl}/v1/chat/completions`
+    ? `${baseUrl}chat/completions`
+    : `${baseUrl}/chat/completions`
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
