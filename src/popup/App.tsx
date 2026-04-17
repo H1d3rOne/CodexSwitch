@@ -418,8 +418,8 @@ export function App() {
       {activeProvider && (
         <div className="shrink-0 mx-4 mb-2 px-3 py-2 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 shadow-sm ring-1 ring-blue-200/80">
           <div className="flex items-center gap-1.5 mb-0.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-            <span className="text-[8px] font-bold text-blue-500 uppercase tracking-widest">Active</span>
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span className="text-[8px] font-bold text-emerald-500 uppercase tracking-widest">Active</span>
           </div>
           <div className="text-[11px] font-semibold text-slate-800 truncate">{activeProvider.name}</div>
           <div className="text-[9px] text-slate-400 font-mono truncate">{activeProvider.baseUrl}</div>
@@ -546,14 +546,6 @@ export function App() {
                     </div>
                     {!selectMode && (
                       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shrink-0">
-                        {!p.isActive && (
-                          <button
-                            onClick={e => { e.stopPropagation(); handleSetActive(p.id) }}
-                            className="px-1.5 py-0.5 rounded text-[8px] font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-200/60 transition-colors"
-                          >
-                            设为当前
-                          </button>
-                        )}
                         <button
                           onClick={e => { e.stopPropagation(); handleTest(p.id) }}
                           disabled={testing !== null}
