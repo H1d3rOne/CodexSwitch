@@ -45,6 +45,13 @@ export async function testProviderConnection(
       return { success: false, statusCode: response.status, message: `${response.status}`, error: `${response.status} ${response.statusText}`, responseBody: truncatedBody }
     }
 
+    let isJson = false
+    try { JSON.parse(bodyText); isJson = true } catch {}
+
+    if (!isJson) {
+      return { success: false, statusCode: 200, message: '200', error: 'Invalid JSON response', responseBody: truncatedBody }
+    }
+
     return { success: true, statusCode: 200, message: '200', responseBody: truncatedBody }
   } catch (error) {
     clearTimeout(timeoutId)
