@@ -53,7 +53,7 @@ describe('App form baseUrl correction', () => {
             statusCode: 200,
             message: '200',
             correctedBaseUrl: 'https://api.example.com/v1',
-            responseBody: '{"ok":true}',
+            responseBody: '{"id":"resp_123","ok":true}',
           },
         }
       }
@@ -79,7 +79,7 @@ describe('App form baseUrl correction', () => {
     expect(screen.queryByText('E')).not.toBeInTheDocument()
   })
 
-  it('fills /v1 into the baseUrl input after test succeeds with correctedBaseUrl without auto-saving', async () => {
+  it('fills /v1 into the baseUrl input and displays the retried test result without auto-saving', async () => {
     const { container } = render(<App />)
 
     const initialButtons = container.querySelectorAll('button')
@@ -95,15 +95,20 @@ describe('App form baseUrl correction', () => {
       target: { value: 'gpt-4o-mini' },
     })
 
-    const buttonsAfterOpen = Array.from(container.querySelectorAll('button'))
-    const addModelButton = buttonsAfterOpen.find(btn => btn.getAttribute('type') === 'button' && btn.textContent?.trim() === '')
-    fireEvent.click(addModelButton!)
+    const addModelInput = screen.getByPlaceholderText('Add model...')
+    const addModelButton = addModelInput.parentElement?.querySelector('button') as HTMLButtonElement | null
+    if (!addModelButton) throw new Error('Add model button not found')
+    fireEvent.click(addModelButton)
 
     fireEvent.click(screen.getByText('Test'))
 
     await waitFor(() => {
       expect(screen.getByDisplayValue('https://api.example.com/v1')).toBeInTheDocument()
     })
+
+    expect(screen.getByText('200')).toBeInTheDocument()
+    expect(screen.getByText('OK')).toBeInTheDocument()
+    expect(screen.getByText('{"id":"resp_123","ok":true}')).toBeInTheDocument()
 
     expect(sendMessageMock).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -53,14 +53,36 @@ export async function testProviderConnection(
       clearTimeout(timeoutId)
       const retryBody = truncateBody(retryResult.body)
 
+      if (!retryResult.ok) {
+        return {
+          success: false,
+          statusCode: retryResult.status,
+          message: `${retryResult.status}`,
+          error: `${retryResult.status}`,
+          responseBody: retryBody,
+        }
+      }
+
       let retryIsJson = false
       try { JSON.parse(retryResult.body); retryIsJson = true } catch {}
 
-      if (retryResult.ok && retryIsJson) {
-        return { success: true, statusCode: 200, message: '200', responseBody: retryBody, correctedBaseUrl: v1Url }
+      if (retryIsJson) {
+        return {
+          success: true,
+          statusCode: retryResult.status,
+          message: `${retryResult.status}`,
+          responseBody: retryBody,
+          correctedBaseUrl: v1Url,
+        }
       }
 
-      return { success: false, statusCode: 200, message: '200', error: 'base_url is not correct', responseBody: truncatedBody }
+      return {
+        success: false,
+        statusCode: retryResult.status,
+        message: `${retryResult.status}`,
+        error: 'base_url is not correct',
+        responseBody: retryBody,
+      }
     }
 
     if (!isJson) {

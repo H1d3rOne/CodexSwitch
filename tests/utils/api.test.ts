@@ -79,18 +79,54 @@ describe('API Utility', () => {
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
-      'https://api.test.com/chat/completions',
+      'https://api.test.com/responses',
       expect.objectContaining({ method: 'POST' })
     )
     expect(fetch).toHaveBeenNthCalledWith(
       2,
-      'https://api.test.com/v1/chat/completions',
+      'https://api.test.com/v1/responses',
       expect.objectContaining({ method: 'POST' })
     )
     expect(result).toMatchObject({
       success: true,
       statusCode: 200,
       correctedBaseUrl: 'https://api.test.com/v1',
+    })
+  })
+
+
+
+  it('should return the second test result when /v1 retry still fails', async () => {
+    ;(fetch as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '<html>first gateway page</html>',
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => '{"error":"retry unauthorized"}',
+      })
+
+    const result = await testProviderConnection('https://api.test.com', 'test-key')
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      'https://api.test.com/responses',
+      expect.objectContaining({ method: 'POST' })
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://api.test.com/v1/responses',
+      expect.objectContaining({ method: 'POST' })
+    )
+    expect(result).toMatchObject({
+      success: false,
+      statusCode: 401,
+      message: '401',
+      error: '401',
+      responseBody: '{"error":"retry unauthorized"}',
     })
   })
 
