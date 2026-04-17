@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import type { Provider, TestResult, ChatMessage, ChatSession } from '../types'
 import { StatusBadge } from '../components/StatusBadge'
-import { testProviderConnection, streamChat } from '../utils/api'
 
 function sendMessage<T>(type: string, payload?: unknown): Promise<T> {
   return chrome.runtime.sendMessage({ type, payload })
@@ -50,13 +49,15 @@ export function App() {
   const dropdownRef = useRef<HTMLDivElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
+  const [proxyUrl, setProxyUrl] = useState('')
 
   useEffect(() => { loadProviders() }, [])
 
   useEffect(() => {
     async function loadSyncState() {
-      const res = await chrome.storage.local.get('sync_enabled')
+      const res = await chrome.storage.local.get(['sync_enabled', 'proxy_url'])
       setSyncEnabled(res.sync_enabled !== false)
+      setProxyUrl((res.proxy_url as string) || '')
     }
     loadSyncState()
   }, [])
@@ -171,23 +172,21 @@ export function App() {
     if (importInputRef.current) importInputRef.current.value = ''
   }
 
+  async function handleProxyChange(val: string) {
+    setProxyUrl(val)
+    await chrome.storage.local.set({ proxy_url: val })
+  }
+
   async function handleTest(id: string) {
     setTesting(id)
     const p = providers.find(p => p.id === id)
-    if (p) {
-      const result = await testProviderConnection(p.baseUrl, p.apiKey, p.model)
-      await sendMessage('UPDATE_TEST_STATUS', { id: p.id, result })
-      await loadProviders()
-    }
+    if (p) { await sendMessage('TEST_PROVIDER', p); await loadProviders() }
     setTesting(null)
   }
 
   async function handleTestAll() {
     setTestingAll(true)
-    for (const p of providers) {
-      const result = await testProviderConnection(p.baseUrl, p.apiKey, p.model)
-      await sendMessage('UPDATE_TEST_STATUS', { id: p.id, result })
-    }
+    for (const p of providers) await sendMessage('TEST_PROVIDER', p)
     await loadProviders()
     setTestingAll(false)
   }
@@ -238,10 +237,11 @@ export function App() {
     if (!formTestModel) return
     setFormTesting(true); setFormTestResult(null)
     try {
-      const result = await testProviderConnection(formBaseUrl, formApiKey, formTestModel)
-      setFormTestResult(result)
-      if (result.correctedBaseUrl) {
-        setFormBaseUrl(result.correctedBaseUrl)
+      const tempProvider = { id: 'temp', name: '', baseUrl: formBaseUrl, apiKey: formApiKey, model: formTestModel, models: [], isActive: false, createdAt: 0, updatedAt: 0 }
+      const res = await sendMessage<{ success: boolean; data?: TestResult }>('TEST_PROVIDER', tempProvider)
+      if (res.success && res.data) {
+        setFormTestResult(res.data)
+        if (res.data.correctedBaseUrl) setFormBaseUrl(res.data.correctedBaseUrl)
       }
     } catch {
       setFormTestResult({ success: false, message: 'Request failed' })
@@ -315,11 +315,25 @@ export function App() {
     setChatMessages([...newMessages, assistantMsg])
 
     try {
-      const stream = streamChat(chatProvider.baseUrl, chatProvider.apiKey, chatModel, newMessages)
-      for await (const chunk of stream) {
-        assistantMsg.content += chunk
-        setChatMessages([...newMessages, { ...assistantMsg }])
-      }
+      const port = (chrome as any).runtime.connect({ name: 'chat-stream' })
+      port.postMessage({ baseUrl: chatProvider.baseUrl, apiKey: chatProvider.apiKey, model: chatModel, messages: newMessages })
+
+      const chunks: string[] = []
+      await new Promise<void>((resolve, reject) => {
+        port.onMessage.addListener((msg: { type: string; data?: string; error?: string }) => {
+          if (msg.type === 'chunk' && msg.data) {
+            chunks.push(msg.data)
+            assistantMsg.content = chunks.join('')
+            setChatMessages([...newMessages, { ...assistantMsg }])
+          } else if (msg.type === 'done') {
+            resolve()
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.error || 'Stream error'))
+          }
+        })
+        port.onDisconnect.addListener(() => { if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message)) })
+      })
+      port.disconnect()
     } catch (err) {
       setChatError(err instanceof Error ? err.message : 'Chat error')
     }
@@ -599,19 +613,22 @@ export function App() {
       </div>
 
       <div className="shrink-0 px-4 py-2 border-t border-slate-200/60 bg-white/80 backdrop-blur-sm">
-        <div className="flex items-center justify-between">
-          <span className="text-[9px] text-slate-400">{providers.length} provider{providers.length !== 1 ? 's' : ''}</span>
-          <div className="flex items-center gap-1.5">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[9px] text-slate-400 shrink-0">{providers.length} provider{providers.length !== 1 ? 's' : ''}</span>
+          <input type="text" value={proxyUrl} onChange={e => handleProxyChange(e.target.value)}
+            placeholder="socks5://127.0.0.1:7890"
+            className="flex-1 min-w-0 px-2 py-1 text-[10px] font-mono bg-slate-50 border border-slate-200 rounded-md focus:outline-none focus:border-blue-300 text-slate-600 placeholder:text-slate-300" />
+          <div className="flex items-center gap-1 shrink-0">
             <input ref={importInputRef} type="file" accept=".json" onChange={handleImportFile} className="hidden" />
             <button onClick={handleImportClick}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-200/60 transition-colors">
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-200/60 transition-colors">
               <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-              Import
+              I
             </button>
             <button onClick={handleExport} disabled={providers.length === 0}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 ring-1 ring-blue-200/60 transition-colors disabled:opacity-30">
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 ring-1 ring-blue-200/60 transition-colors disabled:opacity-30">
               <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-              Export
+              E
             </button>
           </div>
         </div>

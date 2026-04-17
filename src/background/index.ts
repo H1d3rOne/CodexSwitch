@@ -6,7 +6,7 @@ import {
   deleteProvider,
   setActiveProvider,
 } from '../utils/storage'
-import { testProviderConnection } from '../utils/api'
+import { testProviderConnection, streamChat } from '../utils/api'
 import { exportProviders, validateExportData, importProviders } from '../utils/export'
 import {
   getChatSessions,
@@ -17,15 +17,16 @@ import {
 } from '../utils/chat'
 import { updateCodexSystemForProvider } from '../utils/systemConfig'
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.sidePanel.setOptions({ path: 'sidepanel.html' })
-})
+chrome.sidePanel.setOptions({ path: 'sidepanel.html' })
 
 chrome.action.onClicked.addListener((tab) => {
-  if (tab.id) {
-    chrome.sidePanel.open({ tabId: tab.id })
-  }
+  if (tab.id) chrome.sidePanel.open({ tabId: tab.id })
 })
+
+async function getProxyUrl(): Promise<string | undefined> {
+  const res = await chrome.storage.local.get('proxy_url')
+  return res.proxy_url || undefined
+}
 
 chrome.runtime.onMessage.addListener(
   (message: Message, _sender, sendResponse) => {
@@ -33,6 +34,22 @@ chrome.runtime.onMessage.addListener(
     return true
   }
 )
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'chat-stream') {
+    port.onMessage.addListener(async (msg: { baseUrl: string; apiKey: string; model: string; messages: ChatMessage[] }) => {
+      try {
+        const proxyUrl = await getProxyUrl()
+        for await (const chunk of streamChat(msg.baseUrl, msg.apiKey, msg.model, msg.messages, proxyUrl)) {
+          port.postMessage({ type: 'chunk', data: chunk })
+        }
+        port.postMessage({ type: 'done' })
+      } catch (e) {
+        port.postMessage({ type: 'error', error: e instanceof Error ? e.message : 'Unknown error' })
+      }
+    })
+  }
+})
 
 async function handleMessage(message: Message): Promise<MessageResponse> {
   try {
@@ -52,8 +69,11 @@ async function handleMessage(message: Message): Promise<MessageResponse> {
       case 'SET_ACTIVE_PROVIDER':
         return handleSetActiveProvider(message.payload as { id: string; sync?: boolean })
 
-      case 'TEST_PROVIDER':
-        return handleTestProvider(message.payload as Provider)
+      case 'TEST_PROVIDER': {
+        const provider = message.payload as Provider
+        const proxyUrl = await getProxyUrl()
+        return handleTestProvider(provider, proxyUrl)
+      }
 
       case 'UPDATE_TEST_STATUS':
         return handleUpdateTestStatus(message.payload as { id: string; result: TestResult })
@@ -104,9 +124,7 @@ async function handleUpdateProvider(payload: {
   updates: Partial<Provider>
 }): Promise<MessageResponse<Provider>> {
   const updated = await updateProvider(payload.id, payload.updates)
-  if (!updated) {
-    return { success: false, error: 'Provider not found' }
-  }
+  if (!updated) return { success: false, error: 'Provider not found' }
   return { success: true, data: updated }
 }
 
@@ -122,9 +140,7 @@ async function handleSetActiveProvider(payload: { id: string; sync?: boolean }):
     try {
       const providers = await getProviders()
       const current = providers.find(p => p.id === id)
-      if (current) {
-        await updateCodexSystemForProvider(current)
-      }
+      if (current) await updateCodexSystemForProvider(current)
     } catch (e) {
       console.warn('Codex system config sync failed', e)
     }
@@ -132,8 +148,8 @@ async function handleSetActiveProvider(payload: { id: string; sync?: boolean }):
   return { success: true }
 }
 
-async function handleTestProvider(provider: Provider): Promise<MessageResponse<TestResult>> {
-  const result = await testProviderConnection(provider.baseUrl, provider.apiKey, provider.model)
+async function handleTestProvider(provider: Provider, proxyUrl?: string): Promise<MessageResponse<TestResult>> {
+  const result = await testProviderConnection(provider.baseUrl, provider.apiKey, provider.model, proxyUrl)
 
   await updateProvider(provider.id, {
     testStatus: {
@@ -162,7 +178,7 @@ async function handleUpdateTestStatus(payload: { id: string; result: TestResult 
   return { success: true }
 }
 
-async function handleExportProviders(): Promise<MessageResponse> {
+async function handleExportProviders(): Promise<MessageResponse<string>> {
   const providers = await getProviders()
   const data = exportProviders(providers)
   return { success: true, data }
@@ -170,15 +186,10 @@ async function handleExportProviders(): Promise<MessageResponse> {
 
 async function handleImportProviders(data: unknown): Promise<MessageResponse> {
   const validation = validateExportData(data)
-  if (!validation.valid) {
-    return { success: false, error: validation.errors?.join(', ') }
-  }
+  if (!validation.valid) return { success: false, error: validation.errors?.join(', ') }
 
   const providers = importProviders(data as Parameters<typeof importProviders>[0])
-  for (const provider of providers) {
-    await addProvider(provider)
-  }
-
+  for (const provider of providers) await addProvider(provider)
   return { success: true }
 }
 

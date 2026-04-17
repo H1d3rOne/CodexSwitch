@@ -5,7 +5,44 @@ function truncateBody(body: string, maxLen: number = 2000): string {
   return body.slice(0, maxLen) + '...'
 }
 
-async function doTest(url: string, headers: Record<string, string>, model: string, controller: AbortController): Promise<{ ok: boolean; status: number; body: string }> {
+function parseProxyUrl(proxyUrl: string): { scheme: string; host: string; port: number } | null {
+  try {
+    const url = new URL(proxyUrl)
+    const scheme = url.protocol.replace(':', '')
+    if (!['http', 'https', 'socks4', 'socks5'].includes(scheme)) return null
+    return { scheme, host: url.hostname, port: parseInt(url.port) || (scheme.startsWith('socks') ? 1080 : 8080) }
+  } catch {
+    return null
+  }
+}
+
+async function withProxy<T>(proxyUrl: string | undefined, fn: () => Promise<T>): Promise<T> {
+  if (!proxyUrl) return fn()
+
+  const parsed = parseProxyUrl(proxyUrl)
+  if (!parsed) return fn()
+
+  const { scheme, host, port } = parsed
+  const proxyConfig = {
+    mode: "fixed_servers" as const,
+    rules: {
+      singleProxy: { scheme: scheme as 'http' | 'https' | 'socks4' | 'socks5', host, port },
+      bypassList: ["localhost", "127.0.0.1"]
+    }
+  }
+
+  try {
+    await (chrome as any).proxy.settings.set({ value: proxyConfig, scope: 'regular' })
+    const result = await fn()
+    return result
+  } finally {
+    try {
+      await (chrome as any).proxy.settings.clear({ scope: 'regular' })
+    } catch {}
+  }
+}
+
+async function doTest(url: string, headers: Record<string, string>, model: string, signal?: AbortSignal): Promise<{ ok: boolean; status: number; body: string }> {
   const response = await fetch(url, {
     method: 'POST',
     headers,
@@ -14,7 +51,7 @@ async function doTest(url: string, headers: Record<string, string>, model: strin
       messages: [{ role: 'user', content: 'Hi' }],
       max_tokens: 10,
     }),
-    signal: controller.signal,
+    signal,
   })
   const bodyText = await response.text()
   return { ok: response.ok, status: response.status, body: bodyText }
@@ -23,7 +60,8 @@ async function doTest(url: string, headers: Record<string, string>, model: strin
 export async function testProviderConnection(
   baseUrl: string,
   apiKey: string,
-  model: string = 'gpt-3.5-turbo'
+  model: string = 'gpt-3.5-turbo',
+  proxyUrl?: string
 ): Promise<TestResult> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 10000)
@@ -36,7 +74,9 @@ export async function testProviderConnection(
   }
 
   try {
-    const result = await doTest(buildUrl(baseUrl), headers, model, controller)
+    const result = await withProxy(proxyUrl, async () => {
+      return await doTest(buildUrl(baseUrl), headers, model, controller.signal)
+    })
     clearTimeout(timeoutId)
     const truncatedBody = truncateBody(result.body)
 
@@ -49,7 +89,9 @@ export async function testProviderConnection(
 
     if (!isJson && !baseUrl.includes('/v1') && !baseUrl.includes('/v2')) {
       const v1Url = baseUrl.replace(/\/+$/, '') + '/v1'
-      const retryResult = await doTest(buildUrl(v1Url), headers, model, controller)
+      const retryResult = await withProxy(proxyUrl, async () => {
+        return await doTest(buildUrl(v1Url), headers, model, controller.signal)
+      })
       clearTimeout(timeoutId)
       const retryBody = truncateBody(retryResult.body)
 
@@ -86,27 +128,22 @@ export async function* streamChat(
   baseUrl: string,
   apiKey: string,
   model: string,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  proxyUrl?: string
 ): AsyncGenerator<string, void, unknown> {
   const url = baseUrl.endsWith('/')
     ? `${baseUrl}chat/completions`
     : `${baseUrl}/chat/completions`
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  }
-  if (apiKey) {
-    headers['Authorization'] = `Bearer ${apiKey}`
-  }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: true,
-    }),
+  const response = await withProxy(proxyUrl, async () => {
+    return await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model, messages, stream: true }),
+    })
   })
 
   if (!response.ok) {
