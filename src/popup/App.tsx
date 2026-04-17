@@ -235,6 +235,9 @@ export function App() {
     try {
       const result = await testProviderConnection(formBaseUrl, formApiKey, formTestModel)
       setFormTestResult(result)
+      if (result.correctedBaseUrl) {
+        setFormBaseUrl(result.correctedBaseUrl)
+      }
     } catch {
       setFormTestResult({ success: false, message: 'Request failed' })
     }

@@ -42,6 +42,7 @@ export interface TestResult {
   message: string
   error?: string
   responseBody?: string
+  correctedBaseUrl?: string
 }
 
 export interface ChatMessage {
