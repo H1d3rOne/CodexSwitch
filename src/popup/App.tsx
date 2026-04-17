@@ -45,11 +45,20 @@ export function App() {
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [showSessionList, setShowSessionList] = useState(false)
+  const [syncEnabled, setSyncEnabled] = useState(true)
 
   const dropdownRef = useRef<HTMLDivElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { loadProviders() }, [])
+
+  useEffect(() => {
+    async function loadSyncState() {
+      const res = await chrome.storage.local.get('sync_enabled')
+      setSyncEnabled(res.sync_enabled !== false)
+    }
+    loadSyncState()
+  }, [])
 
   useEffect(() => {
     async function loadChatSessions() {
@@ -120,8 +129,14 @@ export function App() {
 
   async function handleSetActive(id: string) {
     if (selectMode) return
-    await sendMessage('SET_ACTIVE_PROVIDER', id)
+    await sendMessage('SET_ACTIVE_PROVIDER', { id, sync: syncEnabled })
     await loadProviders()
+  }
+
+  async function handleToggleSync() {
+    const newVal = !syncEnabled
+    setSyncEnabled(newVal)
+    await chrome.storage.local.set({ sync_enabled: newVal })
   }
 
   async function handleTest(id: string) {
@@ -398,6 +413,18 @@ export function App() {
                 )}
                 Test All
               </button>
+              <div className="flex items-center gap-1 ml-auto">
+                <span className="text-[8px] font-semibold text-slate-400 uppercase tracking-wider">Sync</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={syncEnabled}
+                  onClick={handleToggleSync}
+                  className={`relative w-8 h-4 rounded-full transition-colors duration-200 ${syncEnabled ? 'bg-blue-500' : 'bg-slate-300'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow-sm transition-transform duration-200 ${syncEnabled ? 'translate-x-4' : ''}`} />
+                </button>
+              </div>
               {selectMode ? (
                 <>
                   <button onClick={toggleSelectAll} className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold text-slate-500 bg-slate-50 hover:bg-slate-100 ring-1 ring-slate-200/60 transition-colors">

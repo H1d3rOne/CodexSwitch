@@ -50,7 +50,7 @@ async function handleMessage(message: Message): Promise<MessageResponse> {
         return handleDeleteProvider(message.payload as string)
 
       case 'SET_ACTIVE_PROVIDER':
-        return handleSetActiveProvider(message.payload as string)
+        return handleSetActiveProvider(message.payload as { id: string; sync?: boolean })
 
       case 'TEST_PROVIDER':
         return handleTestProvider(message.payload as Provider)
@@ -112,21 +112,19 @@ async function handleDeleteProvider(id: string): Promise<MessageResponse> {
   return { success: true }
 }
 
-async function handleSetActiveProvider(id: string): Promise<MessageResponse> {
+async function handleSetActiveProvider(payload: { id: string; sync?: boolean }): Promise<MessageResponse> {
+  const { id, sync = true } = payload
   await setActiveProvider(id)
-  // After selecting a provider, attempt to sync Codex system configuration
-  // with the newly active provider. This leverages a native host when available
-  // to write to the system Codex configuration. Fallbacks to a local store if the
-  // native host isn't installed.
-  try {
-    const providers = await getProviders()
-    const current = providers.find(p => p.id === id)
-    if (current) {
-      await updateCodexSystemForProvider(current)
+  if (sync) {
+    try {
+      const providers = await getProviders()
+      const current = providers.find(p => p.id === id)
+      if (current) {
+        await updateCodexSystemForProvider(current)
+      }
+    } catch (e) {
+      console.warn('Codex system config sync failed', e)
     }
-  } catch (e) {
-    // Non-fatal: don't block provider switching if sync fails
-    console.warn('Codex system config sync failed', e)
   }
   return { success: true }
 }
