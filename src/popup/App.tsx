@@ -174,14 +174,19 @@ export function App() {
   async function handleTest(id: string) {
     setTesting(id)
     const p = providers.find(p => p.id === id)
-    if (p) { await sendMessage('TEST_PROVIDER', p); await loadProviders() }
+    if (p) {
+      const result = await testProviderConnection(p.baseUrl, p.apiKey, p.model)
+      await sendMessage('UPDATE_TEST_STATUS', { id: p.id, result })
+      await loadProviders()
+    }
     setTesting(null)
   }
 
   async function handleTestAll() {
     setTestingAll(true)
     for (const p of providers) {
-      await sendMessage('TEST_PROVIDER', p)
+      const result = await testProviderConnection(p.baseUrl, p.apiKey, p.model)
+      await sendMessage('UPDATE_TEST_STATUS', { id: p.id, result })
     }
     await loadProviders()
     setTestingAll(false)

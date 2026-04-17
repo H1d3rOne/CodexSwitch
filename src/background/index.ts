@@ -55,6 +55,9 @@ async function handleMessage(message: Message): Promise<MessageResponse> {
       case 'TEST_PROVIDER':
         return handleTestProvider(message.payload as Provider)
 
+      case 'UPDATE_TEST_STATUS':
+        return handleUpdateTestStatus(message.payload as { id: string; result: TestResult })
+
       case 'EXPORT_PROVIDERS':
         return handleExportProviders()
 
@@ -143,6 +146,20 @@ async function handleTestProvider(provider: Provider): Promise<MessageResponse<T
   })
 
   return { success: true, data: result }
+}
+
+async function handleUpdateTestStatus(payload: { id: string; result: TestResult }): Promise<MessageResponse> {
+  const { id, result } = payload
+  await updateProvider(id, {
+    testStatus: {
+      lastTestTime: Date.now(),
+      isSuccess: result.success,
+      statusCode: result.statusCode,
+      errorMessage: result.error,
+      responseBody: result.responseBody,
+    },
+  })
+  return { success: true }
 }
 
 async function handleExportProviders(): Promise<MessageResponse> {
