@@ -49,6 +49,7 @@ export function App() {
 
   const dropdownRef = useRef<HTMLDivElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { loadProviders() }, [])
 
@@ -137,6 +138,37 @@ export function App() {
     const newVal = !syncEnabled
     setSyncEnabled(newVal)
     await chrome.storage.local.set({ sync_enabled: newVal })
+  }
+
+  async function handleExport() {
+    const res = await sendMessage<{ success: boolean; data: string }>('EXPORT_PROVIDERS')
+    if (res.success && res.data) {
+      const blob = new Blob([res.data], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `codexswitch-export-${new Date().toISOString().slice(0,10)}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  }
+
+  function handleImportClick() {
+    importInputRef.current?.click()
+  }
+
+  async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+      await sendMessage('IMPORT_PROVIDERS', data)
+      await loadProviders()
+    } catch {
+      alert('Invalid config file')
+    }
+    if (importInputRef.current) importInputRef.current.value = ''
   }
 
   async function handleTest(id: string) {
@@ -563,6 +595,25 @@ export function App() {
               ))}
             </div>
           )}
+        </div>
+      </div>
+
+      <div className="shrink-0 px-4 py-2 border-t border-slate-200/60 bg-white/80 backdrop-blur-sm">
+        <div className="flex items-center justify-between">
+          <span className="text-[9px] text-slate-400">{providers.length} provider{providers.length !== 1 ? 's' : ''}</span>
+          <div className="flex items-center gap-1.5">
+            <input ref={importInputRef} type="file" accept=".json" onChange={handleImportFile} className="hidden" />
+            <button onClick={handleImportClick}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-200/60 transition-colors">
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+              Import
+            </button>
+            <button onClick={handleExport} disabled={providers.length === 0}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 ring-1 ring-blue-200/60 transition-colors disabled:opacity-30">
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+              Export
+            </button>
+          </div>
         </div>
       </div>
 
