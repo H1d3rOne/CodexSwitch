@@ -11,8 +11,8 @@ async function doTest(url: string, headers: Record<string, string>, model: strin
     headers,
     body: JSON.stringify({
       model,
-      messages: [{ role: 'user', content: 'Hi' }],
-      max_tokens: 10,
+      input: 'Hi',
+      max_output_tokens: 10,
     }),
     signal,
   })
@@ -32,7 +32,7 @@ export async function testProviderConnection(
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
 
   function buildUrl(url: string): string {
-    return url.endsWith('/') ? `${url}chat/completions` : `${url}/chat/completions`
+    return url.endsWith('/') ? `${url}responses` : `${url}/responses`
   }
 
   try {
@@ -89,16 +89,21 @@ export async function* streamChat(
   messages: ChatMessage[]
 ): AsyncGenerator<string, void, unknown> {
   const url = baseUrl.endsWith('/')
-    ? `${baseUrl}chat/completions`
-    : `${baseUrl}/chat/completions`
+    ? `${baseUrl}responses`
+    : `${baseUrl}/responses`
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
 
+  const input = messages.map(m => ({
+    role: m.role,
+    content: m.content,
+  }))
+
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ model, messages, stream: true }),
+    body: JSON.stringify({ model, input, stream: true }),
   })
 
   if (!response.ok) {
@@ -126,8 +131,11 @@ export async function* streamChat(
       if (data === '[DONE]') return
       try {
         const json = JSON.parse(data)
-        const content = json.choices?.[0]?.delta?.content
-        if (content) yield content
+        if (json.type === 'response.output_text.delta' && json.delta) {
+          yield json.delta
+        } else if (json.choices?.[0]?.delta?.content) {
+          yield json.choices[0].delta.content
+        }
       } catch {}
     }
   }
