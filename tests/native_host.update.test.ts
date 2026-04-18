@@ -70,6 +70,9 @@ describe('native host config sync', () => {
     expect(configToml).not.toContain('[model_providers.AzureOpenAI]')
     expect(configToml).toContain('name = "AzureOpenAI"')
     expect(configToml).toContain('base_url = "https://example.azure.com/openai/v1"')
+    expect(configToml.match(/^model = /gm)).toHaveLength(1)
+    expect(configToml.match(/^\s*name = /gm)).toHaveLength(1)
+    expect(configToml.match(/^\s*base_url = /gm)).toHaveLength(1)
     expect(configToml).toContain('[projects."C:\\work"]')
 
     const authJson = JSON.parse(fs.readFileSync(path.join(codexDir, 'auth.json'), 'utf8'))

@@ -43,19 +43,19 @@ function fromLines(lines, eol) {
   return lines.join(eol).replace(new RegExp(`${eol}+$`), '') + eol;
 }
 
-function updateTopLevelField(lines, field, value) {
+function upsertTopLevelField(lines, field, value) {
   const fieldLine = `${field} = "${escapeTomlString(value)}"`;
   const firstSectionIndex = lines.findIndex(line => /^\s*\[/.test(line));
   const searchEnd = firstSectionIndex === -1 ? lines.length : firstSectionIndex;
 
   for (let i = 0; i < searchEnd; i += 1) {
-    if (new RegExp(`^\s*${field}\s*=`).test(lines[i])) {
+    if (new RegExp(`^\\s*${field}\\s*=`).test(lines[i])) {
       lines[i] = fieldLine;
-      return true;
+      return;
     }
   }
 
-  return false;
+  lines.splice(searchEnd, 0, fieldLine);
 }
 
 function readTopLevelField(lines, field) {
@@ -80,12 +80,20 @@ function formatProviderSectionHeader(name) {
     : `[model_providers."${escapeTomlString(name)}"]`;
 }
 
-function updateProviderSection(lines, sectionKey, providerName, baseUrl) {
+function upsertProviderSection(lines, sectionKey, providerName, baseUrl) {
   const header = formatProviderSectionHeader(sectionKey);
   const start = lines.findIndex(line => line.trim() === header);
+  const sectionLines = [
+    `name = "${escapeTomlString(providerName)}"`,
+    `base_url = "${escapeTomlString(baseUrl)}"`,
+  ];
 
   if (start === -1) {
-    return false;
+    if (lines.length > 0 && lines[lines.length - 1].trim() !== '') {
+      lines.push('');
+    }
+    lines.push(header, ...sectionLines);
+    return;
   }
 
   let end = start + 1;
@@ -94,22 +102,17 @@ function updateProviderSection(lines, sectionKey, providerName, baseUrl) {
   }
 
   const existingBody = lines.slice(start + 1, end);
-  let updated = false;
-
   for (const [field, value] of [['name', providerName], ['base_url', baseUrl]]) {
     const replacement = `${field} = "${escapeTomlString(value)}"`;
-    const idx = existingBody.findIndex(line => new RegExp(`^\s*${field}\s*=`).test(line));
-    if (idx !== -1) {
+    const idx = existingBody.findIndex(line => new RegExp(`^\\s*${field}\\s*=`).test(line));
+    if (idx === -1) {
+      existingBody.push(replacement);
+    } else {
       existingBody[idx] = replacement;
-      updated = true;
     }
   }
 
-  if (updated) {
-    lines.splice(start, end - start, header, ...existingBody);
-  }
-
-  return updated;
+  lines.splice(start, end - start, header, ...existingBody);
 }
 
 
@@ -182,22 +185,26 @@ function writeFileWithPermissionRetry(filePath, content) {
 
 function updateConfigToml(config) {
   try {
-    if (!fs.existsSync(CONFIG_TOML)) {
-      return { success: false, error: 'config.toml not found' };
-    }
+    fs.mkdirSync(CODEX_DIR, { recursive: true });
 
-    const content = fs.readFileSync(CONFIG_TOML, 'utf8');
+    const hasExistingConfig = fs.existsSync(CONFIG_TOML);
+    const content = hasExistingConfig
+      ? fs.readFileSync(CONFIG_TOML, 'utf8')
+      : '';
     const eol = detectEol(content);
     const lines = toLines(content);
 
     const currentModelProvider = readTopLevelField(lines, 'model_provider');
     const targetProviderKey = currentModelProvider || config.name || 'default';
 
+    if (!hasExistingConfig && config.name) {
+      upsertTopLevelField(lines, 'model_provider', config.name);
+    }
     if (config.model) {
-      updateTopLevelField(lines, 'model', config.model);
+      upsertTopLevelField(lines, 'model', config.model);
     }
     if (config.name && config.baseUrl) {
-      updateProviderSection(lines, targetProviderKey, config.name, config.baseUrl);
+      upsertProviderSection(lines, targetProviderKey, config.name, config.baseUrl);
     }
 
     writeFileWithPermissionRetry(CONFIG_TOML, fromLines(lines, eol));
