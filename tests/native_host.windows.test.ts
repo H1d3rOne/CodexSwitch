@@ -30,6 +30,16 @@ describe('Windows native host support', () => {
     expect(uninstallPs1).toContain('codex_config_host.json')
   })
 
+
+
+  it('defines native host write fallback for Windows permission-denied config files', () => {
+    const hostSource = readRelative('native_host/codex_config_host.cjs')
+
+    expect(hostSource).toContain("spawnSync('attrib', ['-R', filePath]")
+    expect(hostSource).toContain('writeFileAtomically(filePath, content)')
+    expect(hostSource).toContain("e.code !== 'EPERM' && e.code !== 'EACCES'")
+  })
+
   it('defines a Windows launcher source that searches for node.exe and starts the host script', () => {
     const launcherSource = readRelative('native_host/windows/CodexConfigHostLauncher.cs')
 

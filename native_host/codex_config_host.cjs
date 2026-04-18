@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { spawnSync } = require('child_process');
 
 const CODEX_DIR = path.join(os.homedir(), '.codex');
 const CONFIG_TOML = path.join(CODEX_DIR, 'config.toml');
@@ -99,18 +100,71 @@ function upsertProviderSection(lines, providerName, baseUrl) {
 }
 
 
-function writeFileWithPermissionRetry(filePath, content) {
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function clearReadonlyAttribute(filePath) {
+  if (!fs.existsSync(filePath)) return;
+
   try {
-    fs.writeFileSync(filePath, content, 'utf8');
-    return;
+    fs.chmodSync(filePath, 0o666);
+  } catch {}
+
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('attrib', ['-R', filePath], { stdio: 'ignore', windowsHide: true });
+    } catch {}
+  }
+}
+
+function writeFileAtomically(filePath, content) {
+  const tempPath = `${filePath}.codexswitch.tmp`;
+  fs.writeFileSync(tempPath, content, 'utf8');
+
+  try {
+    fs.renameSync(tempPath, filePath);
   } catch (e) {
     if (!e || (e.code !== 'EPERM' && e.code !== 'EACCES') || !fs.existsSync(filePath)) {
       throw e;
     }
 
-    fs.chmodSync(filePath, 0o666);
-    fs.writeFileSync(filePath, content, 'utf8');
+    clearReadonlyAttribute(filePath);
+    try {
+      fs.rmSync(filePath, { force: true });
+    } catch {}
+    fs.renameSync(tempPath, filePath);
+  } finally {
+    if (fs.existsSync(tempPath)) {
+      try { fs.rmSync(tempPath, { force: true }); } catch {}
+    }
   }
+}
+
+function writeFileWithPermissionRetry(filePath, content) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      fs.writeFileSync(filePath, content, 'utf8');
+      return;
+    } catch (e) {
+      lastError = e;
+      if (!e || (e.code !== 'EPERM' && e.code !== 'EACCES')) {
+        throw e;
+      }
+
+      clearReadonlyAttribute(filePath);
+      if (attempt < 2) sleepMs(75 * (attempt + 1));
+    }
+  }
+
+  if (!lastError || (lastError.code !== 'EPERM' && lastError.code !== 'EACCES')) {
+    throw lastError;
+  }
+
+  clearReadonlyAttribute(filePath);
+  writeFileAtomically(filePath, content);
 }
 
 function updateConfigToml(config) {
