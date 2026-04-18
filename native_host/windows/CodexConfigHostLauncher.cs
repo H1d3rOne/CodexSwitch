@@ -11,6 +11,12 @@ internal static class CodexConfigHostLauncher
         var hostScript = Path.GetFullPath(Path.Combine(launcherDir, "..", "codex_config_host.cjs"));
         var nodePathFile = Path.Combine(launcherDir, "codex_config_host_node_path.txt");
 
+        if (!File.Exists(hostScript))
+        {
+            Console.Error.WriteLine("[CodexSwitch] Host script not found: " + hostScript);
+            return 1;
+        }
+
         foreach (var candidate in CandidateNodePaths(nodePathFile))
         {
             if (!string.IsNullOrWhiteSpace(candidate) && File.Exists(candidate))

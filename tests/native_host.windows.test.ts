@@ -15,6 +15,8 @@ describe('Windows native host support', () => {
 
     expect(installPs1).toContain('HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\codex_config_host')
     expect(installPs1).toContain('codex_config_host.json')
+    expect(installPs1).toContain('codex_config_host_node_path.txt')
+    expect(installPs1).toContain('Set-Content -Path $nodePathFile')
     expect(installPs1).toContain('chrome-extension://$ExtensionId/')
     expect(installPs1).toContain('Add-Type')
     expect(installPs1).toContain('OutputType')
@@ -43,6 +45,9 @@ describe('Windows native host support', () => {
   it('defines a Windows launcher source that searches for node.exe and starts the host script', () => {
     const launcherSource = readRelative('native_host/windows/CodexConfigHostLauncher.cs')
 
+    expect(launcherSource).toContain('hostScript')
+    expect(launcherSource).toContain('File.Exists(hostScript)')
+    expect(launcherSource).toContain('Host script not found')
     expect(launcherSource).toContain('where.exe')
     expect(launcherSource).toContain('node.exe')
     expect(launcherSource).toContain('codex_config_host.cjs')
