@@ -75,6 +75,46 @@ describe('native host config sync', () => {
     expect(authJson.OPENAI_API_KEY).toBe('sk-test')
   })
 
+
+
+  it('can rewrite a read-only config.toml by fixing permissions before retrying', () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexswitch-host-'))
+    const codexDir = path.join(homeDir, '.codex')
+    fs.mkdirSync(codexDir, { recursive: true })
+
+    const configPath = path.join(codexDir, 'config.toml')
+    fs.writeFileSync(
+      configPath,
+      [
+        'model_provider = "OpenAI"',
+        'model = "gpt-4"',
+        '',
+        '[model_providers.OpenAI]',
+        'name = "OpenAI"',
+        'base_url = "https://api.openai.com/v1"',
+        '',
+      ].join('\n'),
+      'utf8'
+    )
+    fs.chmodSync(configPath, 0o444)
+
+    const response = runNativeHost(homeDir, {
+      action: 'updateConfig',
+      config: {
+        name: 'RetryProvider',
+        baseUrl: 'https://retry.example.com/v1',
+        apiKey: 'sk-retry',
+        model: 'gpt-4.1-mini',
+      },
+    })
+
+    expect(response).toEqual({ success: true })
+
+    const configToml = fs.readFileSync(configPath, 'utf8')
+    expect(configToml).toContain('model_provider = "RetryProvider"')
+    expect(configToml).toContain('[model_providers.RetryProvider]')
+  })
+
   it('creates config.toml when missing', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexswitch-host-'))
     const response = runNativeHost(homeDir, {

@@ -1,9 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Codex Switch",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "OpenAI API Provider Manager - 管理多个 OpenAI 兼容 API 供应商",
-  "permissions": ["storage", "sidePanel", "nativeMessaging"],
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "nativeMessaging"
+  ],
   "background": {
     "service_worker": "background.js"
   },

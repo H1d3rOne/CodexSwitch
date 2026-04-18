@@ -98,6 +98,21 @@ function upsertProviderSection(lines, providerName, baseUrl) {
   lines.splice(start, end - start, header, ...existingBody);
 }
 
+
+function writeFileWithPermissionRetry(filePath, content) {
+  try {
+    fs.writeFileSync(filePath, content, 'utf8');
+    return;
+  } catch (e) {
+    if (!e || (e.code !== 'EPERM' && e.code !== 'EACCES') || !fs.existsSync(filePath)) {
+      throw e;
+    }
+
+    fs.chmodSync(filePath, 0o666);
+    fs.writeFileSync(filePath, content, 'utf8');
+  }
+}
+
 function updateConfigToml(config) {
   try {
     fs.mkdirSync(CODEX_DIR, { recursive: true });
@@ -119,7 +134,7 @@ function updateConfigToml(config) {
       upsertProviderSection(lines, config.name, config.baseUrl);
     }
 
-    fs.writeFileSync(CONFIG_TOML, fromLines(lines, eol), 'utf8');
+    writeFileWithPermissionRetry(CONFIG_TOML, fromLines(lines, eol));
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -138,7 +153,7 @@ function updateAuthJson(apiKey) {
     authData.OPENAI_API_KEY = apiKey;
 
     fs.mkdirSync(CODEX_DIR, { recursive: true });
-    fs.writeFileSync(AUTH_JSON, JSON.stringify(authData, null, 2), 'utf8');
+    writeFileWithPermissionRetry(AUTH_JSON, JSON.stringify(authData, null, 2));
 
     return { success: true };
   } catch (e) {
