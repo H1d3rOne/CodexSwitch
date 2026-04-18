@@ -1,6 +1,6 @@
 {
   "name": "codex-switch",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "OpenAI API Provider Manager Chrome Extension",
   "type": "module",
   "scripts": {

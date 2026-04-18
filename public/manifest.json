@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Codex Switch",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "OpenAI API Provider Manager - 管理多个 OpenAI 兼容 API 供应商",
   "permissions": [
     "storage",
