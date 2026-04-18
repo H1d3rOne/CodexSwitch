@@ -1,6 +1,6 @@
 # Codex Switch
 
-[简体中文](./README_CN.md)
+[English](./README.md) | [简体中文](./README_CN.md)
 
 A Chrome extension for managing multiple OpenAI-compatible API providers, with one-click switching, connection testing, AI chat, and config sync to Codex CLI.
 

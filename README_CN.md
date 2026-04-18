@@ -1,6 +1,6 @@
 # Codex Switch
 
-[English](./README.md)
+[English](./README.md) | [简体中文](./README_CN.md)
 
 一个 Chrome 扩展，用于管理多个 OpenAI 兼容 API 供应商，支持一键切换、测试连接、AI 聊天，并可同步配置到系统 Codex CLI。
 
