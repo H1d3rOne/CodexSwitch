@@ -128,12 +128,14 @@ async function handleSetActiveProvider(payload: { id: string; sync?: boolean }):
   const { id, sync = true } = payload
   await setActiveProvider(id)
   if (sync) {
-    try {
-      const providers = await getProviders()
-      const current = providers.find(p => p.id === id)
-      if (current) await updateCodexSystemForProvider(current)
-    } catch (e) {
-      console.warn('Codex system config sync failed', e)
+    const providers = await getProviders()
+    const current = providers.find(p => p.id === id)
+    if (current) {
+      const syncResult = await updateCodexSystemForProvider(current)
+      if (!syncResult.success) {
+        console.warn('Codex system config sync failed', syncResult.error)
+        return { success: false, error: syncResult.error || 'Codex system config sync failed' }
+      }
     }
   }
   return { success: true }

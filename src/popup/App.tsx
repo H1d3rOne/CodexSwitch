@@ -139,8 +139,11 @@ export function App() {
 
   async function handleSetActive(id: string) {
     if (selectMode) return
-    await sendMessage('SET_ACTIVE_PROVIDER', { id, sync: syncEnabled })
+    const res = await sendMessage<{ success: boolean; error?: string }>('SET_ACTIVE_PROVIDER', { id, sync: syncEnabled })
     await loadProviders()
+    if (!res.success) {
+      alert(`Set active succeeded but Codex sync failed: ${res.error || 'Unknown error'}`)
+    }
   }
 
   async function handleToggleSync() {
