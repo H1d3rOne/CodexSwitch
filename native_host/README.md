@@ -7,7 +7,7 @@
 1. 用户在 CodexSwitch 扩展中选中一个 Provider
 2. 扩展通过 Chrome Native Messaging 调用此主机
 3. 主机将配置写入:
-   - `~/.codex/config.toml` - 更新 model_provider, model, [model_providers.<name>] 部分
+   - `~/.codex/config.toml` - 保持现有 `model_provider` 不变，更新顶层 `model`，并更新当前 `model_provider` 对应 section 的 `name` / `base_url`
    - `~/.codex/auth.json` - 更新 OPENAI_API_KEY
 
 ## 安装
@@ -107,7 +107,12 @@ powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 
 ### config.toml
 
-更新顶层字段和 model_providers 部分：
+更新规则：
+
+- 若已有 `model_provider`，保持其原值不变
+- 更新顶层 `model`
+- 更新当前 `model_provider` 对应 section 的 `name` / `base_url`
+- 若 `config.toml` 不存在，则自动初始化
 
 ```toml
 model_provider = "OpenAI"
