@@ -1,4 +1,4 @@
-import type { Message, MessageResponse, Provider, TestResult, ChatMessage, ChatSession } from '../types'
+import type { Message, MessageResponse, Provider, TestResult, ChatMessage, ChatSession, ExportData } from '../types'
 import {
   getProviders,
   addProvider,
@@ -171,7 +171,7 @@ async function handleUpdateTestStatus(payload: { id: string; result: TestResult 
   return { success: true }
 }
 
-async function handleExportProviders(): Promise<MessageResponse<string>> {
+async function handleExportProviders(): Promise<MessageResponse<ExportData>> {
   const providers = await getProviders()
   const data = exportProviders(providers)
   return { success: true, data }

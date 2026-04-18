@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import type { Provider, TestResult, ChatMessage, ChatSession } from '../types'
+import type { Provider, TestResult, ChatMessage, ChatSession, ExportData } from '../types'
 import { StatusBadge } from '../components/StatusBadge'
 
 function sendMessage<T>(type: string, payload?: unknown): Promise<T> {
@@ -153,9 +153,9 @@ export function App() {
   }
 
   async function handleExport() {
-    const res = await sendMessage<{ success: boolean; data: string }>('EXPORT_PROVIDERS')
+    const res = await sendMessage<{ success: boolean; data: ExportData }>('EXPORT_PROVIDERS')
     if (res.success && res.data) {
-      const blob = new Blob([res.data], { type: 'application/json' })
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -175,10 +175,13 @@ export function App() {
     try {
       const text = await file.text()
       const data = JSON.parse(text)
-      await sendMessage('IMPORT_PROVIDERS', data)
+      const res = await sendMessage<{ success: boolean; error?: string }>('IMPORT_PROVIDERS', data)
+      if (!res.success) {
+        throw new Error(res.error || 'Invalid config file')
+      }
       await loadProviders()
-    } catch {
-      alert('Invalid config file')
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Invalid config file')
     }
     if (importInputRef.current) importInputRef.current.value = ''
   }
