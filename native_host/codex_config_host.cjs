@@ -58,14 +58,30 @@ function upsertTopLevelField(lines, field, value) {
   lines.splice(searchEnd, 0, fieldLine);
 }
 
+function readTopLevelField(lines, field) {
+  const firstSectionIndex = lines.findIndex(line => /^\s*\[/.test(line));
+  const searchEnd = firstSectionIndex === -1 ? lines.length : firstSectionIndex;
+
+  for (let i = 0; i < searchEnd; i += 1) {
+    const match = lines[i].match(new RegExp(`^\\s*${field}\\s*=\\s*"((?:\\\\.|[^"])*)"\\s*$`));
+    if (match) {
+      return match[1]
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+    }
+  }
+
+  return null;
+}
+
 function formatProviderSectionHeader(name) {
   return /^[A-Za-z0-9_-]+$/.test(name)
     ? `[model_providers.${name}]`
     : `[model_providers."${escapeTomlString(name)}"]`;
 }
 
-function upsertProviderSection(lines, providerName, baseUrl) {
-  const header = formatProviderSectionHeader(providerName);
+function upsertProviderSection(lines, sectionKey, providerName, baseUrl) {
+  const header = formatProviderSectionHeader(sectionKey);
   const start = lines.findIndex(line => line.trim() === header);
   const sectionLines = [
     `name = "${escapeTomlString(providerName)}"`,
@@ -171,21 +187,25 @@ function updateConfigToml(config) {
   try {
     fs.mkdirSync(CODEX_DIR, { recursive: true });
 
-    const content = fs.existsSync(CONFIG_TOML)
+    const hasExistingConfig = fs.existsSync(CONFIG_TOML);
+    const content = hasExistingConfig
       ? fs.readFileSync(CONFIG_TOML, 'utf8')
       : '';
 
     const eol = detectEol(content);
     const lines = toLines(content);
 
-    if (config.name) {
+    const currentModelProvider = readTopLevelField(lines, 'model_provider');
+    const targetProviderKey = currentModelProvider || config.name || 'default';
+
+    if (!hasExistingConfig && config.name) {
       upsertTopLevelField(lines, 'model_provider', config.name);
     }
     if (config.model) {
       upsertTopLevelField(lines, 'model', config.model);
     }
     if (config.name && config.baseUrl) {
-      upsertProviderSection(lines, config.name, config.baseUrl);
+      upsertProviderSection(lines, targetProviderKey, config.name, config.baseUrl);
     }
 
     writeFileWithPermissionRetry(CONFIG_TOML, fromLines(lines, eol));

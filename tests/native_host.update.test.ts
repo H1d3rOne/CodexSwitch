@@ -29,7 +29,7 @@ function runNativeHost(homeDir: string, message: unknown) {
 }
 
 describe('native host config sync', () => {
-  it('updates model_provider and provider section fields in config.toml and writes auth.json', () => {
+  it('keeps model_provider unchanged and updates the active provider section fields in config.toml', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexswitch-host-'))
     const codexDir = path.join(homeDir, '.codex')
     fs.mkdirSync(codexDir, { recursive: true })
@@ -64,9 +64,10 @@ describe('native host config sync', () => {
     expect(response).toEqual({ success: true })
 
     const configToml = fs.readFileSync(path.join(codexDir, 'config.toml'), 'utf8')
-    expect(configToml).toContain('model_provider = "AzureOpenAI"')
+    expect(configToml).toContain('model_provider = "OpenAI"')
     expect(configToml).toContain('model = "gpt-4.1"')
-    expect(configToml).toContain('[model_providers.AzureOpenAI]')
+    expect(configToml).toContain('[model_providers.OpenAI]')
+    expect(configToml).not.toContain('[model_providers.AzureOpenAI]')
     expect(configToml).toContain('name = "AzureOpenAI"')
     expect(configToml).toContain('base_url = "https://example.azure.com/openai/v1"')
     expect(configToml).toContain('[projects."C:\\work"]')
@@ -74,8 +75,6 @@ describe('native host config sync', () => {
     const authJson = JSON.parse(fs.readFileSync(path.join(codexDir, 'auth.json'), 'utf8'))
     expect(authJson.OPENAI_API_KEY).toBe('sk-test')
   })
-
-
 
   it('can rewrite a read-only config.toml by fixing permissions before retrying', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexswitch-host-'))
@@ -111,11 +110,13 @@ describe('native host config sync', () => {
     expect(response).toEqual({ success: true })
 
     const configToml = fs.readFileSync(configPath, 'utf8')
-    expect(configToml).toContain('model_provider = "RetryProvider"')
-    expect(configToml).toContain('[model_providers.RetryProvider]')
+    expect(configToml).toContain('model_provider = "OpenAI"')
+    expect(configToml).toContain('[model_providers.OpenAI]')
+    expect(configToml).toContain('name = "RetryProvider"')
+    expect(configToml).toContain('base_url = "https://retry.example.com/v1"')
   })
 
-  it('creates config.toml when missing', () => {
+  it('initializes config.toml when missing', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codexswitch-host-'))
     const response = runNativeHost(homeDir, {
       action: 'updateConfig',
@@ -133,5 +134,7 @@ describe('native host config sync', () => {
     expect(configToml).toContain('model_provider = "OpenAI"')
     expect(configToml).toContain('model = "gpt-5"')
     expect(configToml).toContain('[model_providers.OpenAI]')
+    expect(configToml).toContain('name = "OpenAI"')
+    expect(configToml).toContain('base_url = "https://api.openai.com/v1"')
   })
 })
