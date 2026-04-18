@@ -56,7 +56,7 @@ internal static class CodexConfigHostLauncher
         process.StartInfo = new ProcessStartInfo
         {
             FileName = nodePath,
-            Arguments = $"\"{hostScript}\"",
+            Arguments = "\"" + hostScript + "\"",
             UseShellExecute = false,
             RedirectStandardInput = false,
             RedirectStandardOutput = false,
