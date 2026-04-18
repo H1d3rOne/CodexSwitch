@@ -2,16 +2,51 @@ import type { Provider } from '../types'
 
 export async function updateCodexSystemForProvider(provider: Provider): Promise<{ success: boolean; error?: string }> {
   console.log('[CodexSwitch] updateCodexSystemForProvider called with:', provider.name)
+
+  const config = {
+    action: 'updateConfig',
+    config: {
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      model: provider.model
+    }
+  }
   
   const hasNativeHost =
     typeof chrome !== 'undefined' &&
     chrome?.runtime &&
-    typeof (chrome as any).runtime.connectNative === 'function'
+    (
+      typeof (chrome as any).runtime.sendNativeMessage === 'function' ||
+      typeof (chrome as any).runtime.connectNative === 'function'
+    )
 
   console.log('[CodexSwitch] hasNativeHost:', hasNativeHost)
 
   if (hasNativeHost) {
     try {
+      if (typeof (chrome as any).runtime.sendNativeMessage === 'function') {
+        console.log('[CodexSwitch] Sending config via sendNativeMessage:', config)
+        return await new Promise((resolve) => {
+          try {
+            ;(chrome as any).runtime.sendNativeMessage('codex_config_host', config, (msg: any) => {
+              const error = chrome.runtime.lastError
+              if (error) {
+                console.log('[CodexSwitch] Native host lastError:', error)
+                resolve({ success: false, error: error.message || 'Disconnected' })
+                return
+              }
+
+              console.log('[CodexSwitch] Native host response:', msg)
+              resolve({ success: !!msg?.success, error: msg?.error })
+            })
+          } catch (err) {
+            console.error('[CodexSwitch] Error:', err)
+            resolve({ success: false, error: (err as Error).message })
+          }
+        })
+      }
+
       return await new Promise((resolve) => {
         try {
           console.log('[CodexSwitch] Connecting to native host...')
@@ -28,15 +63,6 @@ export async function updateCodexSystemForProvider(provider: Provider): Promise<
             resolve({ success: false, error: error?.message || 'Disconnected' })
           })
           
-          const config = {
-            action: 'updateConfig',
-            config: {
-              name: provider.name,
-              baseUrl: provider.baseUrl,
-              apiKey: provider.apiKey,
-              model: provider.model
-            }
-          }
           console.log('[CodexSwitch] Sending config:', config)
           port.postMessage(config)
         } catch (err) {
