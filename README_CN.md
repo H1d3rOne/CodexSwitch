@@ -65,7 +65,7 @@ chmod +x install.sh
 
 #### Windows
 
-以管理员身份运行 PowerShell：
+运行 PowerShell：
 
 ```powershell
 cd native_host
@@ -114,12 +114,19 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 ### 导入导出
 
-- **导出** - 点击底部 **Export** 按钮导出所有供应商配置为 JSON 文件
-- **导入** - 点击底部 **Import** 按钮从 JSON 文件导入供应商配置
+- **导出** - 点击底部 **Export** 按钮导出所有供应商配置为格式化的 JSON 文件
+- **导入** - 点击底部 **Import** 按钮从 JSON 文件导入供应商配置；如果文件格式或版本不正确，会显示具体校验错误
 
 ## 配置文件
 
 ### Codex CLI 配置（通过 Native Host 同步）
+
+同步规则：
+
+- 保持现有顶层 `model_provider` 不变
+- 更新顶层 `model`
+- 更新当前 `model_provider` 对应 section 的 `name` / `base_url`
+- 如果 `config.toml` 不存在，则自动初始化
 
 **~/.codex/config.toml**
 ```toml
