@@ -65,7 +65,7 @@ Enter the extension ID when prompted.
 
 #### Windows
 
-Run PowerShell as Administrator:
+Run PowerShell:
 
 ```powershell
 cd native_host
@@ -120,6 +120,13 @@ Click on a provider card to set it as the active provider. Enable the **Sync** t
 ## Config Files
 
 ### Codex CLI Config (synced via Native Host)
+
+Sync behavior:
+
+- Keep the existing top-level `model_provider` unchanged
+- Update the top-level `model`
+- Update the current `model_provider` section's `name` and `base_url`
+- Initialize `config.toml` automatically if it does not exist
 
 **~/.codex/config.toml**
 ```toml
