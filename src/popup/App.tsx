@@ -45,10 +45,14 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [showSessionList, setShowSessionList] = useState(false)
   const [syncEnabled, setSyncEnabled] = useState(true)
+  const [chatProviderDropdownOpen, setChatProviderDropdownOpen] = useState(false)
+  const [chatModelDropdownOpen, setChatModelDropdownOpen] = useState(false)
 
   const dropdownRef = useRef<HTMLDivElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
+  const chatProviderDropdownRef = useRef<HTMLDivElement>(null)
+  const chatModelDropdownRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { loadProviders() }, [])
 
@@ -83,6 +87,12 @@ export function App() {
     function handleClickOutside(e: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setOpenDropdownId(null)
+      }
+      if (chatProviderDropdownRef.current && !chatProviderDropdownRef.current.contains(e.target as Node)) {
+        setChatProviderDropdownOpen(false)
+      }
+      if (chatModelDropdownRef.current && !chatModelDropdownRef.current.contains(e.target as Node)) {
+        setChatModelDropdownOpen(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -656,27 +666,50 @@ export function App() {
               </div>
             </div>
             <div className="flex gap-2">
-              <select
-                value={chatProviderId}
-                onChange={e => {
-                  const p = providers.find(x => x.id === e.target.value)
-                  if (p) { setChatProviderId(p.id); setChatModel(p.model) }
-                }}
-                className="flex-1 px-2 py-1.5 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 text-slate-700"
-              >
-                {providers.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-              <select
-                value={chatModel}
-                onChange={e => setChatModel(e.target.value)}
-                className="flex-1 px-2 py-1.5 text-[11px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 text-slate-700"
-              >
-                {(chatProvider?.models || [chatModel]).map(m => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
+              <div ref={chatProviderDropdownRef} className="relative flex-1">
+                <button
+                  onClick={() => { setChatProviderDropdownOpen(!chatProviderDropdownOpen); setChatModelDropdownOpen(false) }}
+                  className="w-full px-2 py-1.5 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 text-slate-700 text-left flex items-center justify-between"
+                >
+                  <span className="truncate">{chatProvider?.name || 'Select provider'}</span>
+                  <svg className="w-3 h-3 text-slate-400 shrink-0 ml-1" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+                </button>
+                {chatProviderDropdownOpen && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-40 overflow-y-auto">
+                    {providers.map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => { setChatProviderId(p.id); setChatModel(p.model); setChatProviderDropdownOpen(false) }}
+                        className={`w-full px-2 py-1.5 text-[11px] text-left hover:bg-slate-50 ${p.id === chatProviderId ? 'bg-blue-50 text-blue-600' : 'text-slate-700'}`}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div ref={chatModelDropdownRef} className="relative flex-1">
+                <button
+                  onClick={() => { setChatModelDropdownOpen(!chatModelDropdownOpen); setChatProviderDropdownOpen(false) }}
+                  className="w-full px-2 py-1.5 text-[11px] font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 text-slate-700 text-left flex items-center justify-between"
+                >
+                  <span className="truncate">{chatModel || 'Select model'}</span>
+                  <svg className="w-3 h-3 text-slate-400 shrink-0 ml-1" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+                </button>
+                {chatModelDropdownOpen && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-40 overflow-y-auto">
+                    {(chatProvider?.models || [chatModel]).map(m => (
+                      <button
+                        key={m}
+                        onClick={() => { setChatModel(m); setChatModelDropdownOpen(false) }}
+                        className={`w-full px-2 py-1.5 text-[11px] font-mono text-left hover:bg-slate-50 ${m === chatModel ? 'bg-blue-50 text-blue-600' : 'text-slate-700'}`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
