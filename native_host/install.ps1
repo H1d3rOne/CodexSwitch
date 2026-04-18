@@ -51,9 +51,9 @@ if (Test-Path $launcherPath) {
     Remove-Item -Path $launcherPath -Force
 }
 
-Add-Type \
-    -Path $launcherSourcePath \
-    -OutputAssembly $launcherPath \
+Add-Type `
+    -Path $launcherSourcePath `
+    -OutputAssembly $launcherPath `
     -OutputType ConsoleApplication
 
 $manifest = @{
