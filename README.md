@@ -213,3 +213,4 @@ npm test
 ## License
 
 MIT
+欢迎来[linux.do](https://linux.do/)社区交流、分享和反馈。
