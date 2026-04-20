@@ -212,4 +212,5 @@ npm test
 
 ## License
 
-MIT
+MIT   
+Thanks to the [linux.do](https://linux.do/) community for the discussions, sharing, and feedback.
