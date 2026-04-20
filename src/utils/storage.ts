@@ -5,7 +5,13 @@ const STORAGE_KEY = 'codex_switch_data'
 
 async function getStorageData(): Promise<StorageData> {
   const result = await chrome.storage.local.get(STORAGE_KEY)
-  return result[STORAGE_KEY] || { providers: [], activeProviderId: null }
+  const raw = result[STORAGE_KEY] || {}
+
+  return {
+    providers: Array.isArray(raw.providers) ? raw.providers : [],
+    activeProviderId: raw.activeProviderId ?? null,
+    sites: Array.isArray(raw.sites) ? raw.sites : [],
+  }
 }
 
 async function setStorageData(data: StorageData): Promise<void> {
@@ -76,5 +82,35 @@ export async function getActiveProvider(): Promise<Provider | null> {
 }
 
 export async function clearAllProviders(): Promise<void> {
-  await setStorageData({ providers: [], activeProviderId: null })
+  const data = await getStorageData()
+  await setStorageData({ providers: [], activeProviderId: null, sites: data.sites })
+}
+
+export async function getSites() {
+  const data = await getStorageData()
+  return data.sites
+}
+
+export async function addSite(site: Omit<import('../types').Site, 'id' | 'createdAt' | 'updatedAt'>): Promise<import('../types').Site> {
+  const data = await getStorageData()
+  const now = Date.now()
+  const newSite: import('../types').Site = { ...site, id: generateUUID(), createdAt: now, updatedAt: now }
+  data.sites.push(newSite)
+  await setStorageData(data)
+  return newSite
+}
+
+export async function updateSite(id: string, updates: Partial<Omit<import('../types').Site, 'id' | 'createdAt'>>): Promise<import('../types').Site | null> {
+  const data = await getStorageData()
+  const index = data.sites.findIndex(s => s.id === id)
+  if (index === -1) return null
+  data.sites[index] = { ...data.sites[index], ...updates, updatedAt: Date.now() }
+  await setStorageData(data)
+  return data.sites[index]
+}
+
+export async function deleteSite(id: string): Promise<void> {
+  const data = await getStorageData()
+  data.sites = data.sites.filter(s => s.id !== id)
+  await setStorageData(data)
 }

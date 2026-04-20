@@ -1,10 +1,14 @@
-import type { Message, MessageResponse, Provider, TestResult, ChatMessage, ChatSession, ExportData } from '../types'
+import type { Message, MessageResponse, Provider, TestResult, ChatMessage, ChatSession, ExportData, Site } from '../types'
 import {
   getProviders,
   addProvider,
   updateProvider,
   deleteProvider,
   setActiveProvider,
+  getSites,
+  addSite,
+  updateSite,
+  deleteSite,
 } from '../utils/storage'
 import { testProviderConnection, streamChat } from '../utils/api'
 import { exportProviders, validateExportData, importProviders } from '../utils/export'
@@ -86,6 +90,24 @@ async function handleMessage(message: Message): Promise<MessageResponse> {
 
       case 'SET_ACTIVE_SESSION':
         return handleSetActiveSession(message.payload as string)
+
+      case 'GET_SITES':
+        return handleGetSites()
+
+      case 'ADD_SITE':
+        return handleAddSite(message.payload as Omit<Site, 'id' | 'createdAt' | 'updatedAt'>)
+
+      case 'UPDATE_SITE':
+        return handleUpdateSite(message.payload as { id: string; updates: Partial<Site> })
+
+      case 'DELETE_SITE':
+        return handleDeleteSite(message.payload as string)
+
+      case 'TEST_SITE':
+        return handleTestSite(message.payload as Site)
+
+      case 'CHECKIN_SITE':
+        return handleCheckinSite(message.payload as Site)
 
       default:
         return { success: false, error: 'Unknown message type' }
@@ -210,4 +232,101 @@ async function handleDeleteChatSession(id: string): Promise<MessageResponse> {
 async function handleSetActiveSession(id: string): Promise<MessageResponse> {
   await setActiveSessionId(id)
   return { success: true }
+}
+
+async function handleGetSites(): Promise<MessageResponse<Site[]>> {
+  const sites = await getSites()
+  return { success: true, data: sites }
+}
+
+async function handleAddSite(site: Omit<Site, 'id' | 'createdAt' | 'updatedAt'>): Promise<MessageResponse<Site>> {
+  const newSite = await addSite(site)
+  return { success: true, data: newSite }
+}
+
+async function handleUpdateSite(payload: { id: string; updates: Partial<Site> }): Promise<MessageResponse<Site>> {
+  const updated = await updateSite(payload.id, payload.updates)
+  if (!updated) return { success: false, error: 'Site not found' }
+  return { success: true, data: updated }
+}
+
+async function handleDeleteSite(id: string): Promise<MessageResponse> {
+  await deleteSite(id)
+  return { success: true }
+}
+
+async function handleTestSite(site: Site): Promise<MessageResponse<TestResult>> {
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000)
+
+    const response = await fetch(site.url, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: site.token ? { Authorization: `Bearer ${site.token}` } : {},
+    })
+
+    clearTimeout(timeoutId)
+    const result: TestResult = {
+      success: response.ok,
+      statusCode: response.status,
+      message: `${response.status}`,
+      error: response.ok ? undefined : `${response.status}`,
+    }
+
+    await updateSite(site.id, {
+      testStatus: {
+        lastTestTime: Date.now(),
+        isSuccess: result.success,
+        statusCode: result.statusCode,
+        errorMessage: result.error,
+      },
+    })
+
+    return { success: true, data: result }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return { success: false, error: message }
+  }
+}
+
+async function handleCheckinSite(site: Site): Promise<MessageResponse<TestResult>> {
+  if (!site.checkinUrl) {
+    return { success: false, error: 'Checkin URL not configured' }
+  }
+
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 15000)
+
+    const headers: Record<string, string> = {}
+    if (site.token) {
+      headers['Authorization'] = `Bearer ${site.token}`
+    }
+    if (site.checkinHeaders) {
+      Object.assign(headers, site.checkinHeaders)
+    }
+
+    const response = await fetch(site.checkinUrl, {
+      method: site.checkinMethod || 'POST',
+      signal: controller.signal,
+      headers,
+    })
+
+    clearTimeout(timeoutId)
+    const text = await response.text()
+
+    const result: TestResult = {
+      success: response.ok,
+      statusCode: response.status,
+      message: `${response.status}`,
+      error: response.ok ? undefined : `${response.status}`,
+      responseBody: text.slice(0, 500),
+    }
+
+    return { success: true, data: result }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return { success: false, error: message }
+  }
 }

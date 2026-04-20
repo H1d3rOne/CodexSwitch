@@ -6,6 +6,7 @@ import {
   deleteProvider,
   setActiveProvider,
   getActiveProvider,
+  getSites,
 } from '../../src/utils/storage'
 import type { Provider } from '../../src/types'
 
@@ -110,5 +111,15 @@ describe('Storage Utility', () => {
     await setActiveProvider(provider2.id)
     const newActive = await getActiveProvider()
     expect(newActive?.id).toBe(provider2.id)
+  })
+
+  it('should return empty sites list for legacy storage data without sites field', async () => {
+    mockStorage.codex_switch_data = {
+      providers: [],
+      activeProviderId: null,
+    }
+
+    const sites = await getSites()
+    expect(sites).toEqual([])
   })
 })

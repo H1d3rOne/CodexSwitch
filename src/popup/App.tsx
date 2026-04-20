@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
-import type { Provider, TestResult, ChatMessage, ChatSession, ExportData } from '../types'
+import type { Provider, TestResult, ChatMessage, ChatSession, ExportData, Site } from '../types'
 import { StatusBadge } from '../components/StatusBadge'
+import { SiteForm } from '../components/SiteForm'
+import { SiteCard } from '../components/SiteCard'
 
 function sendMessage<T>(type: string, payload?: unknown): Promise<T> {
   return chrome.runtime.sendMessage({ type, payload })
@@ -47,6 +49,11 @@ export function App() {
   const [syncEnabled, setSyncEnabled] = useState(true)
   const [chatProviderDropdownOpen, setChatProviderDropdownOpen] = useState(false)
   const [chatModelDropdownOpen, setChatModelDropdownOpen] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [sites, setSites] = useState<Site[]>([])
+  const [addingSite, setAddingSite] = useState(false)
+  const [testingSiteId, setTestingSiteId] = useState<string | null>(null)
+  const [checkingInSiteId, setCheckingInSiteId] = useState<string | null>(null)
 
   const dropdownRef = useRef<HTMLDivElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
@@ -135,6 +142,44 @@ export function App() {
       setProviders(list)
       setActiveProvider(list.find(p => p.isActive) || null)
     }
+  }
+
+  async function loadSites() {
+    const res = await sendMessage<{ success: boolean; data: Site[] }>('GET_SITES')
+    if (res.success) setSites(Array.isArray(res.data) ? res.data : [])
+  }
+
+  useEffect(() => { loadSites() }, [])
+
+  async function handleAddSite(data: Omit<Site, 'id' | 'createdAt' | 'updatedAt'>) {
+    const res = await sendMessage<{ success: boolean; data: Site }>('ADD_SITE', data)
+    if (res.success) {
+      setSites(prev => [...prev, res.data!])
+      setAddingSite(false)
+    }
+  }
+
+  async function handleTestSite(site: Site) {
+    setTestingSiteId(site.id)
+    const res = await sendMessage<{ success: boolean; data: TestResult }>('TEST_SITE', site)
+    if (res.success && res.data) {
+      setSites(prev => prev.map(s =>
+        s.id === site.id ? { ...s, testStatus: { lastTestTime: Date.now(), isSuccess: res.data!.success, statusCode: res.data!.statusCode, errorMessage: res.data!.error } } : s
+      ))
+    }
+    setTestingSiteId(null)
+  }
+
+  async function handleCheckinSite(site: Site) {
+    setCheckingInSiteId(site.id)
+    const res = await sendMessage<{ success: boolean; data?: TestResult; error?: string }>('CHECKIN_SITE', site)
+    if (!res.success) alert(`Check-in failed: ${res.error}`)
+    setCheckingInSiteId(null)
+  }
+
+  async function handleDeleteSite(id: string) {
+    await sendMessage('DELETE_SITE', id)
+    setSites(prev => prev.filter(s => s.id !== id))
   }
 
   async function handleSetActive(id: string) {
@@ -626,6 +671,10 @@ export function App() {
         <div className="flex items-center justify-between">
           <span className="text-[9px] text-slate-400">{providers.length} provider{providers.length !== 1 ? 's' : ''}</span>
           <div className="flex items-center gap-1.5">
+            <button onClick={() => setShowSettings(true)}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 ring-1 ring-slate-200/60 transition-colors">
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.725.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.005.847c-.277.234-.42.585-.42.938 0 .09.008.178.023.263l.456 1.217a1.125 1.125 0 01-.49 1.37l-2.247 1.296a1.125 1.125 0 01-1.43-.26l-.847-1.005c-.234-.277-.585-.42-.938-.42-.09 0-.178.008-.263.023l-1.217.456a1.125 1.125 0 01-1.37-.49L8.18 10.03a1.125 1.125 0 01.26-1.43l1.005-.847c.277-.234.42-.585.42-.938 0-.09-.008-.178-.023-.263l-.456-1.217a1.125 1.125 0 01.49-1.37l2.247-1.296c.37-.216.847-.088 1.13.259l.847 1.005c.234.277.585.42.938.42.09 0 .178-.008.263-.023l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.005.847c-.277.234-.42.585-.42.938 0 .09.008.177.023.263l-.456 1.217a1.125 1.125 0 01-.49 1.37zM15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            </button>
             <input ref={importInputRef} type="file" accept=".json" onChange={handleImportFile} className="hidden" />
             <button onClick={handleImportClick}
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-200/60 transition-colors">
@@ -940,6 +989,59 @@ export function App() {
               </div>
             </div>
           </form>
+        </div>
+      </div>
+
+      <div
+        className={`absolute inset-0 bg-[#f8f9fb] z-10 transform transition-transform duration-200 ease-out shadow-xl ${
+          showSettings ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
+        <div className="h-full flex flex-col">
+          <div className="shrink-0 px-4 pt-4 pb-2 border-b border-slate-200/60">
+            <div className="flex items-center justify-between">
+              <span className="text-[14px] font-bold text-slate-900 tracking-tight">Site Management</span>
+              <button onClick={() => setShowSettings(false)} className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-slate-100 transition-colors">
+                <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+          </div>
+
+          {addingSite ? (
+            <div className="flex-1 overflow-y-auto px-4 py-3">
+              <SiteForm
+                onSave={handleAddSite}
+                onCancel={() => setAddingSite(false)}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="shrink-0 px-4 py-2 border-b border-slate-100">
+                <button onClick={() => setAddingSite(true)}
+                  className="w-full py-2 text-[11px] font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors flex items-center justify-center gap-1">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+                  Add Site
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+                {sites.length === 0 ? (
+                  <div className="text-center text-[11px] text-slate-400 py-8">No sites added yet</div>
+                ) : sites.map(site => (
+                  <SiteCard
+                    key={site.id}
+                    site={site}
+                    onTest={id => handleTestSite(sites.find(s => s.id === id)!)}
+                    onCheckin={id => handleCheckinSite(sites.find(s => s.id === id)!)}
+                    onEdit={() => {}}
+                    onDelete={handleDeleteSite}
+                    testing={testingSiteId === site.id}
+                    checkingIn={checkingInSiteId === site.id}
+                  />
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -19,9 +19,23 @@ export interface Provider {
   updatedAt: number
 }
 
+export interface Site {
+  id: string
+  name: string
+  url: string
+  token?: string
+  checkinUrl?: string
+  checkinMethod?: 'GET' | 'POST'
+  checkinHeaders?: Record<string, string>
+  testStatus?: TestStatus
+  createdAt: number
+  updatedAt: number
+}
+
 export interface StorageData {
   providers: Provider[]
   activeProviderId: string | null
+  sites: Site[]
 }
 
 export interface ExportData {
@@ -74,6 +88,12 @@ export type MessageType =
   | 'SAVE_CHAT_SESSION'
   | 'DELETE_CHAT_SESSION'
   | 'SET_ACTIVE_SESSION'
+  | 'GET_SITES'
+  | 'ADD_SITE'
+  | 'UPDATE_SITE'
+  | 'DELETE_SITE'
+  | 'TEST_SITE'
+  | 'CHECKIN_SITE'
 
 export interface Message {
   type: MessageType
