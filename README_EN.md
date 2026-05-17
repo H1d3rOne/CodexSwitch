@@ -6,12 +6,37 @@ A Chrome extension for managing multiple OpenAI-compatible API providers, with o
 
 ## Features
 
+### Provider Management
 - **Provider Management** - Add, edit, delete multiple OpenAI-compatible API providers
 - **One-Click Switch** - Quickly switch the active API provider
 - **Connection Testing** - Test API connections, support batch testing
 - **AI Chat** - Built-in chat interface for quick API response testing
 - **Config Sync** - Sync config to `~/.codex/config.toml` and `~/.codex/auth.json` via Native Messaging
 - **Import/Export** - Import and export provider configurations
+
+### Site Management
+- **Site Management** - Add, edit, delete multiple New API sites
+- **One-Click Import** - Auto-import site name, URL, Cookie from browser, and auto-fetch Access Token
+- **Unified Auth** - Support both Access Token and Cookie auth, Access Token preferred, fallback to Cookie on failure
+- **Balance Query** - Query site balance, supports USD, CNY, and custom units
+- **Model List** - Auto-fetch available models from site
+
+### Auto Check-in
+- **Scheduled Check-in** - Set check-in time range, auto check-in at random time
+- **Check-in Status** - Display check-in status, date, and error messages
+- **Cookie Refresh** - Auto-refresh when Cookie expires
+- **Turnstile Support** - Auto-handle Turnstile-protected check-ins
+
+### Webhook Notifications
+- **Multi-Platform** - Support WeCom, DingTalk, Feishu, generic Webhook
+- **Auto-Detect** - Auto-detect Webhook platform from URL
+- **Check-in Notifications** - Send notifications after check-in
+- **Test Feature** - Built-in Webhook test functionality
+
+### Group Management
+- **Site Groups** - Support site grouping, default group not renameable
+- **Quick Filter** - Filter sites by group
+- **Group Editing** - Double-click dropdown item to edit group name
 
 ## Installation
 

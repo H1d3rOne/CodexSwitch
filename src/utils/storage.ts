@@ -1,4 +1,4 @@
-import type { Provider, StorageData } from '../types'
+import type { Provider, Site, StorageData } from '../types'
 import { generateUUID } from './uuid'
 
 const STORAGE_KEY = 'codex_switch_data'
@@ -7,8 +7,22 @@ async function getStorageData(): Promise<StorageData> {
   const result = await chrome.storage.local.get(STORAGE_KEY)
   const raw = result[STORAGE_KEY] || {}
 
+  const providers = Array.isArray(raw.providers) ? raw.providers : []
+  // Migrate existing providers without format/groupApiKeys fields
+  const migratedProviders = providers.map((p: Provider) => {
+    const groupApiKeys = p.groupApiKeys || { default: p.apiKey || '' }
+    const models = p.models || (p.model ? [{ name: p.model, apiType: p.apiType || 'both' }] : [])
+    return {
+      ...p,
+      format: p.format || 'openai',
+      groupApiKeys,
+      groupModels: p.groupModels || { default: models },
+      activeGroup: p.activeGroup || 'default',
+    }
+  })
+
   return {
-    providers: Array.isArray(raw.providers) ? raw.providers : [],
+    providers: migratedProviders,
     activeProviderId: raw.activeProviderId ?? null,
     sites: Array.isArray(raw.sites) ? raw.sites : [],
   }
@@ -84,6 +98,20 @@ export async function getActiveProvider(): Promise<Provider | null> {
 export async function clearAllProviders(): Promise<void> {
   const data = await getStorageData()
   await setStorageData({ providers: [], activeProviderId: null, sites: data.sites })
+}
+
+export async function reorderProviders(orderedIds: string[]): Promise<void> {
+  const data = await getStorageData()
+  const map = new Map(data.providers.map(p => [p.id, p]))
+  data.providers = orderedIds.map(id => map.get(id)).filter(Boolean) as Provider[]
+  await setStorageData(data)
+}
+
+export async function reorderSites(orderedIds: string[]): Promise<void> {
+  const data = await getStorageData()
+  const map = new Map(data.sites.map(s => [s.id, s]))
+  data.sites = orderedIds.map(id => map.get(id)).filter(Boolean) as Site[]
+  await setStorageData(data)
 }
 
 export async function getSites() {

@@ -1,4 +1,4 @@
-import type { Provider, ExportData } from '../types'
+import type { Provider, ExportData, ApiType, ProviderFormat } from '../types'
 
 export function exportProviders(providers: Provider[]): ExportData {
   return {
@@ -8,8 +8,13 @@ export function exportProviders(providers: Provider[]): ExportData {
       name: p.name,
       baseUrl: p.baseUrl,
       apiKey: p.apiKey,
+      groupApiKeys: p.groupApiKeys || { default: p.apiKey || '' },
+      groupModels: p.groupModels || { default: p.models || [] },
+      activeGroup: p.activeGroup || 'default',
       model: p.model,
       models: p.models,
+      apiType: p.apiType || 'both',
+      format: p.format || 'openai',
     })),
   }
 }
@@ -44,8 +49,8 @@ export function validateExportData(data: unknown): {
     if (!provider.baseUrl || typeof provider.baseUrl !== 'string') {
       errors.push(`Provider ${index} missing baseUrl`)
     }
-    if (!provider.apiKey || typeof provider.apiKey !== 'string') {
-      errors.push(`Provider ${index} missing apiKey`)
+    if (provider.apiKey !== undefined && typeof provider.apiKey !== 'string') {
+      errors.push(`Provider ${index} apiKey must be a string if provided`)
     }
   })
 
@@ -57,14 +62,24 @@ export function validateExportData(data: unknown): {
 }
 
 export function importProviders(data: ExportData): Array<Omit<Provider, 'id' | 'createdAt' | 'updatedAt'>> {
-  return data.providers.map(p => ({
-    name: p.name,
-    baseUrl: p.baseUrl,
-    apiKey: p.apiKey,
-    model: p.model || 'gpt-3.5-turbo',
-    models: p.models || [p.model || 'gpt-3.5-turbo'],
-    isActive: false,
-  }))
+  return data.providers.map(p => {
+    const groupApiKeys = p.groupApiKeys || { default: p.apiKey || '' }
+    const activeGroup = p.activeGroup || 'default'
+    const models = p.models || [{ name: p.model || 'gpt-3.5-turbo', apiType: (p.apiType || 'both') as ApiType }]
+    return {
+      name: p.name,
+      baseUrl: p.baseUrl,
+      apiKey: groupApiKeys[activeGroup] || p.apiKey || '',
+      groupApiKeys,
+      groupModels: p.groupModels || { default: models },
+      activeGroup,
+      model: p.model || 'gpt-3.5-turbo',
+      models,
+      apiType: p.apiType || 'both',
+      format: p.format || 'openai',
+      isActive: false,
+    }
+  })
 }
 
 export function downloadJSON(data: ExportData, filename: string): void {

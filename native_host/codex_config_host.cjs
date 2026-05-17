@@ -7,6 +7,8 @@ const { spawnSync } = require('child_process');
 const CODEX_DIR = path.join(os.homedir(), '.codex');
 const CONFIG_TOML = path.join(CODEX_DIR, 'config.toml');
 const AUTH_JSON = path.join(CODEX_DIR, 'auth.json');
+const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const CLAUDE_SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 
 function readSync() {
   const lengthBuf = Buffer.alloc(4);
@@ -234,6 +236,38 @@ function updateAuthJson(apiKey) {
   }
 }
 
+function updateClaudeSettings(config) {
+  try {
+    fs.mkdirSync(CLAUDE_DIR, { recursive: true });
+
+    let settings = {};
+    if (fs.existsSync(CLAUDE_SETTINGS)) {
+      const content = fs.readFileSync(CLAUDE_SETTINGS, 'utf8');
+      settings = JSON.parse(content);
+    }
+
+    if (!settings.env) {
+      settings.env = {};
+    }
+
+    if (config.ANTHROPIC_BASE_URL) {
+      settings.env.ANTHROPIC_BASE_URL = config.ANTHROPIC_BASE_URL;
+    }
+    if (config.ANTHROPIC_AUTH_TOKEN) {
+      settings.env.ANTHROPIC_AUTH_TOKEN = config.ANTHROPIC_AUTH_TOKEN;
+    }
+    if (config.model) {
+      settings.model = config.model;
+      settings.env.ANTHROPIC_MODEL = config.model;
+    }
+
+    writeFileWithPermissionRetry(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2));
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
 try {
   const message = readSync();
 
@@ -247,6 +281,14 @@ try {
       writeSync({ success: true });
     } else {
       writeSync({ success: false, error: tomlResult.error || authResult.error });
+    }
+  } else if (message && message.action === 'updateClaudeConfig') {
+    const config = message.config || {};
+    const result = updateClaudeSettings(config);
+    if (result.success) {
+      writeSync({ success: true });
+    } else {
+      writeSync({ success: false, error: result.error });
     }
   } else if (message && message.action === 'ping') {
     writeSync({ success: true, pong: true });

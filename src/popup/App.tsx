@@ -1,8 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react'
-import type { Provider, TestResult, ChatMessage, ChatSession, ExportData, Site } from '../types'
+import type { Provider, TestResult, ChatMessage, ChatSession, ExportData, Site, ModelEntry, ApiType, ProviderFormat, SiteAuthType } from '../types'
 import { StatusBadge } from '../components/StatusBadge'
 import { SiteForm } from '../components/SiteForm'
 import { SiteCard } from '../components/SiteCard'
+
+function localDateStr(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 function sendMessage<T>(type: string, payload?: unknown): Promise<T> {
   return chrome.runtime.sendMessage({ type, payload })
@@ -22,19 +27,37 @@ export function App() {
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null)
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [copiedId, setCopiedId] = useState<string | null>(null)
+
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null)
 
   const [formName, setFormName] = useState('')
   const [formBaseUrl, setFormBaseUrl] = useState('')
   const [formApiKey, setFormApiKey] = useState('')
-  const [formModels, setFormModels] = useState<string[]>([])
+  const [formModels, setFormModels] = useState<ModelEntry[]>([])
   const [formNewModel, setFormNewModel] = useState('')
+  const [formNewModelApiType, setFormNewModelApiType] = useState<ApiType>('both')
+  const [formModelFilter, setFormModelFilter] = useState<ApiType | 'all'>('all')
+  const [editingModelName, setEditingModelName] = useState<string | null>(null)
+  const [editingModelValue, setEditingModelValue] = useState('')
   const [formTestModel, setFormTestModel] = useState<string>('')
+  const [formApiType, setFormApiType] = useState<ApiType>('both')
+  const [formFormat, setFormFormat] = useState<ProviderFormat>('openai')
+  const [formGroupApiKeys, setFormGroupApiKeys] = useState<Record<string, string>>({ default: '' })
+  const [formGroupModels, setFormGroupModels] = useState<Record<string, ModelEntry[]>>({ default: [] })
+  const [formActiveGroup, setFormActiveGroup] = useState('default')
+  const [groupEditing, setGroupEditing] = useState(false)
+  const [groupNewName, setGroupNewName] = useState('')
+  const [groupRenaming, setGroupRenaming] = useState(false)
+  const [groupRenameValue, setGroupRenameValue] = useState('')
+  const [groupRenamingTarget, setGroupRenamingTarget] = useState('')
+  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [formTesting, setFormTesting] = useState(false)
   const [formTestResult, setFormTestResult] = useState<TestResult | null>(null)
+  const [expandedEndpoint, setExpandedEndpoint] = useState<string | null>(null)
+  const [syncingModels, setSyncingModels] = useState(false)
+  const [syncModelsError, setSyncModelsError] = useState<string | null>(null)
 
   const [chatProviderId, setChatProviderId] = useState<string>('')
   const [chatModel, setChatModel] = useState<string>('')
@@ -50,26 +73,54 @@ export function App() {
   const [chatProviderDropdownOpen, setChatProviderDropdownOpen] = useState(false)
   const [chatModelDropdownOpen, setChatModelDropdownOpen] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [checkinExpanded, setCheckinExpanded] = useState(true)
+  const [checkinTab, setCheckinTab] = useState<'enabled' | 'disabled'>('enabled')
+  const pendingCheckinDone = useRef(false)
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+  const [siteDragId, setSiteDragId] = useState<string | null>(null)
+  const [siteDragOverId, setSiteDragOverId] = useState<string | null>(null)
   const [sites, setSites] = useState<Site[]>([])
   const [addingSite, setAddingSite] = useState(false)
+  const [editingSite, setEditingSite] = useState<Site | null>(null)
   const [testingSiteId, setTestingSiteId] = useState<string | null>(null)
   const [checkingInSiteId, setCheckingInSiteId] = useState<string | null>(null)
+  const [checkingInAll, setCheckingInAll] = useState(false)
+  const [refreshingSiteId, setRefreshingSiteId] = useState<string | null>(null)
+  const [refreshingBalances, setRefreshingBalances] = useState(false)
+  const [webhookUrl, setWebhookUrl] = useState('')
+  const [webhookEnabled, setWebhookEnabled] = useState(false)
+  const [webhookTesting, setWebhookTesting] = useState(false)
+  const [webhookTestResult, setWebhookTestResult] = useState<{ success: boolean; message: string } | null>(null)
 
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const groupDropdownRef = useRef<HTMLDivElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const chatProviderDropdownRef = useRef<HTMLDivElement>(null)
   const chatModelDropdownRef = useRef<HTMLDivElement>(null)
+  const siteListRef = useRef<HTMLDivElement>(null)
+  const siteListScrollPos = useRef(0)
 
-  useEffect(() => { loadProviders() }, [])
+  useEffect(() => {
+    if (!addingSite && !editingSite && siteListRef.current) {
+      siteListRef.current.scrollTop = siteListScrollPos.current
+    }
+  }, [addingSite, editingSite])
+
+  useEffect(() => { loadProviders(); refreshBalances() }, [])
 
   useEffect(() => {
     async function loadSyncState() {
-      const res = await chrome.storage.local.get(['sync_enabled'])
+      const res = await chrome.storage.local.get(['sync_enabled', 'webhook_url', 'webhook_enabled'])
       setSyncEnabled(res.sync_enabled !== false)
+      setWebhookUrl(res.webhook_url || '')
+      setWebhookEnabled(res.webhook_enabled || false)
     }
     loadSyncState()
   }, [])
+
+  const groupOptions = Object.keys(formGroupApiKeys).sort()
 
   useEffect(() => {
     async function loadChatSessions() {
@@ -100,6 +151,9 @@ export function App() {
       }
       if (chatModelDropdownRef.current && !chatModelDropdownRef.current.contains(e.target as Node)) {
         setChatModelDropdownOpen(false)
+      }
+      if (groupDropdownRef.current && !groupDropdownRef.current.contains(e.target as Node)) {
+        setGroupDropdownOpen(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -135,21 +189,150 @@ export function App() {
   async function loadProviders() {
     const res = await sendMessage<{ success: boolean; data: Provider[] }>('GET_PROVIDERS')
     if (res.success) {
-      const list = res.data.map(p => ({
-        ...p,
-        models: Array.isArray(p.models) && p.models.length > 0 ? p.models : [p.model],
-      }))
+      const list = res.data.map(p => {
+        const allModels = Array.isArray(p.models) && p.models.length > 0
+          ? p.models.map(m => typeof m === 'string' ? { name: m, apiType: p.apiType || 'both' as ApiType } : m)
+          : (p.model ? [{ name: p.model, apiType: p.apiType || 'both' as ApiType }] : [])
+        const gm = p.groupModels || { default: allModels }
+        const ag = p.activeGroup || 'default'
+        const activeModels = gm[ag] || allModels
+        const currentModel = p.model || activeModels[0]?.name
+        const modelExists = activeModels.some(m => m.name === currentModel)
+        return {
+          ...p,
+          models: activeModels,
+          model: modelExists ? currentModel : (activeModels[0]?.name || p.model),
+          groupModels: gm,
+        }
+      })
       setProviders(list)
       setActiveProvider(list.find(p => p.isActive) || null)
     }
   }
 
-  async function loadSites() {
-    const res = await sendMessage<{ success: boolean; data: Site[] }>('GET_SITES')
-    if (res.success) setSites(Array.isArray(res.data) ? res.data : [])
+  async function refreshBalances() {
+    const sitesRes = await sendMessage<{ success: boolean; data: Site[] }>('GET_SITES')
+    if (!sitesRes.success || !sitesRes.data) return
+    const sites = sitesRes.data
+    const provRes = await sendMessage<{ success: boolean; data: Provider[] }>('GET_PROVIDERS')
+    if (!provRes.success || !provRes.data) return
+    const providers = provRes.data
+
+    for (const site of sites) {
+      if (site.authType !== 'cookie' && !site.accessToken) continue
+      if (!site.providerId) continue
+      const provider = providers.find(p => p.id === site.providerId)
+      if (!provider) continue
+
+      const balanceRes = await sendMessage<{ success: boolean; data: string }>('FETCH_SITE_BALANCE', {
+        url: site.url,
+        accessToken: site.accessToken,
+        cookie: site.cookie,
+        userId: site.userId,
+        authType: site.authType,
+        balanceUnit: site.balanceUnit,
+        balanceCustomUnit: site.balanceCustomUnit,
+      })
+      if (balanceRes.success && balanceRes.data) {
+        await sendMessage('UPDATE_PROVIDER', { id: provider.id, updates: { balance: balanceRes.data } })
+        setProviders(prev => prev.map(p => p.id === provider.id ? { ...p, balance: balanceRes.data } : p))
+      }
+    }
   }
 
-  useEffect(() => { loadSites() }, [])
+  async function loadSites() {
+    const res = await sendMessage<{ success: boolean; data: Site[] }>('GET_SITES')
+    if (res.success) {
+      const today = localDateStr()
+      const list = (Array.isArray(res.data) ? res.data : []).map(s => {
+        if (s.checkinStatus && s.checkinDate !== today) {
+          return { ...s, checkinStatus: undefined, checkinDate: undefined }
+        }
+        return s
+      })
+      setSites(list)
+    }
+  }
+
+  async function refreshAllBalances() {
+    setRefreshingBalances(true)
+    await sendMessage('REFRESH_ALL_BALANCES')
+    await Promise.all([loadSites(), loadProviders()])
+    setRefreshingBalances(false)
+  }
+
+  async function refreshSiteBalance(siteId: string) {
+    setRefreshingSiteId(siteId)
+    const site = sites.find(s => s.id === siteId)
+    if (!site) return
+    const res = await sendMessage<{ success: boolean; data: string }>('FETCH_SITE_BALANCE', {
+      url: site.url,
+      accessToken: site.accessToken,
+      cookie: site.cookie,
+      userId: site.userId,
+      authType: site.authType,
+      balanceUnit: site.balanceUnit,
+      balanceCustomUnit: site.balanceCustomUnit,
+    })
+    if (res.success && res.data) {
+      await sendMessage('UPDATE_SITE', { id: siteId, updates: { balance: res.data } })
+      setSites(prev => prev.map(s => s.id === siteId ? { ...s, balance: res.data } : s))
+      if (site.providerId) {
+        await sendMessage('UPDATE_PROVIDER', { id: site.providerId, updates: { balance: res.data } })
+        setProviders(prev => prev.map(p => p.id === site.providerId ? { ...p, balance: res.data } : p))
+      }
+    }
+    setRefreshingSiteId(null)
+  }
+
+  useEffect(() => {
+    loadSites().then(() => {
+      refreshAllBalances()
+      if (!pendingCheckinDone.current) {
+        pendingCheckinDone.current = true
+        sendMessage('PERFORM_PENDING_CHECKIN')
+      }
+    })
+  }, [])
+
+  async function autoCheckinAll() {
+    const sitesRes = await sendMessage<{ success: boolean; data: Site[] }>('GET_SITES')
+    if (!sitesRes.success || !sitesRes.data) return
+    const today = localDateStr()
+    const now = new Date()
+    const currentHour = now.getHours()
+    const currentMinute = now.getMinutes()
+    const autoSites = sitesRes.data.filter(s => {
+      if (!s.autoCheckin) return false
+      if (s.checkinDate === today && s.checkinStatus?.isSuccess) return false
+      if (s.checkinTimeRange) {
+        const { startHour, endHour, scheduledMinute } = s.checkinTimeRange
+        if (startHour <= endHour) {
+          if (currentHour < startHour || currentHour >= endHour) return false
+        } else {
+          if (currentHour < startHour && currentHour >= endHour) return false
+        }
+        if (scheduledMinute != null) {
+          const targetHour = startHour + Math.floor(scheduledMinute / 60)
+          const targetMin = scheduledMinute % 60
+          if (currentHour < targetHour || (currentHour === targetHour && currentMinute < targetMin)) return false
+        }
+      }
+      return true
+    })
+    await Promise.all(autoSites.map(site => handleCheckinSite(site, false)))
+  }
+
+  async function handleCheckinAll() {
+    setCheckingInAll(true)
+    const today = localDateStr()
+    const eligible = sites.filter(s => s.autoCheckin && !(s.checkinDate === today && s.checkinStatus?.isSuccess))
+    await Promise.all(eligible.map(site => handleCheckinSite(site, true)))
+    setCheckingInAll(false)
+    if (webhookEnabled && webhookUrl) {
+      await sendMessage('SEND_WEBHOOK', { sites, today })
+    }
+  }
 
   async function handleAddSite(data: Omit<Site, 'id' | 'createdAt' | 'updatedAt'>) {
     const res = await sendMessage<{ success: boolean; data: Site }>('ADD_SITE', data)
@@ -159,21 +342,208 @@ export function App() {
     }
   }
 
+  async function handleUpdateSite(data: Omit<Site, 'id' | 'createdAt' | 'updatedAt'>) {
+    if (!editingSite) return
+    const res = await sendMessage<{ success: boolean }>('UPDATE_SITE', { id: editingSite.id, updates: data })
+    if (res.success) {
+      setSites(prev => prev.map(s => s.id === editingSite.id ? { ...s, ...data } : s))
+      setEditingSite(null)
+    }
+  }
+
+  async function handleAutoProvision(siteData: Omit<Site, 'id' | 'createdAt' | 'updatedAt'>) {
+    const modelsRes = await sendMessage<{ success: boolean; data: string[]; error?: string }>('FETCH_SITE_MODELS', {
+      url: siteData.url,
+      accessToken: siteData.accessToken,
+      cookie: siteData.cookie,
+      authType: siteData.authType,
+    })
+    if (!modelsRes.success || !modelsRes.data?.length) {
+      throw new Error(`Failed to fetch models: ${modelsRes.error || 'no models found'}`)
+    }
+
+    const tokenRes = await sendMessage<{ success: boolean; data: string; error?: string }>('CREATE_SITE_TOKEN', {
+      url: siteData.url,
+      accessToken: siteData.accessToken,
+      cookie: siteData.cookie,
+      name: 'CodexSwitch',
+      authType: siteData.authType,
+    })
+    if (!tokenRes.success || !tokenRes.data) {
+      throw new Error(`Failed to create token: ${tokenRes.error || 'unknown error'}`)
+    }
+
+    const apiKey = tokenRes.data
+    const modelEntries: ModelEntry[] = modelsRes.data.map(m => ({ name: m, apiType: 'both' as ApiType }))
+    const firstModel = modelEntries[0]?.name || ''
+
+    const providerRes = await sendMessage<{ success: boolean; data: Provider }>('ADD_PROVIDER', {
+      name: siteData.name,
+      baseUrl: siteData.url,
+      apiKey,
+      model: firstModel,
+      models: modelEntries,
+      apiType: 'both' as ApiType,
+      format: 'openai' as ProviderFormat,
+      groupApiKeys: { default: apiKey },
+      activeGroup: 'default',
+    })
+
+    if (!providerRes.success || !providerRes.data) {
+      throw new Error('Failed to create provider')
+    }
+
+    const balanceRes = await sendMessage<{ success: boolean; data: string }>('FETCH_SITE_BALANCE', {
+      url: siteData.url,
+      accessToken: siteData.accessToken,
+      cookie: siteData.cookie,
+      userId: siteData.userId,
+      authType: siteData.authType,
+      balanceUnit: siteData.balanceUnit,
+      balanceCustomUnit: siteData.balanceCustomUnit,
+    })
+    const balance = balanceRes.success ? balanceRes.data : undefined
+    if (balance) {
+      await sendMessage('UPDATE_PROVIDER', { id: providerRes.data.id, updates: { balance } })
+      providerRes.data.balance = balance
+    }
+
+    setProviders(prev => [...prev, providerRes.data!])
+
+    const siteWithProvider = { ...siteData, providerId: providerRes.data.id }
+    const siteRes = await sendMessage<{ success: boolean; data: Site }>('ADD_SITE', siteWithProvider)
+    if (siteRes.success) {
+      setSites(prev => [...prev, siteRes.data!])
+      setAddingSite(false)
+    }
+  }
+
+  async function handleSyncProvider(siteData: { name: string; url: string; authType: SiteAuthType; accessToken?: string; cookie?: string; userId?: string }) {
+    const baseUrl = siteData.url.replace(/\/+$/, '') + '/v1'
+
+    const tokenInfoRes = await sendMessage<{ success: boolean; data?: Array<{ id: number; group: string }>; error?: string }>('FETCH_SITE_TOKEN_INFO', {
+      url: siteData.url,
+      accessToken: siteData.accessToken,
+      cookie: siteData.cookie,
+      userId: siteData.userId,
+      authType: siteData.authType,
+    })
+    if (!tokenInfoRes.success || !tokenInfoRes.data || tokenInfoRes.data.length === 0) {
+      throw new Error(`获取令牌信息失败: ${tokenInfoRes.error || 'unknown error'}`)
+    }
+
+    const groupApiKeys: Record<string, string> = {}
+    let firstApiKey = ''
+    let firstGroup = 'default'
+
+    for (const token of tokenInfoRes.data) {
+      const tokenKeyRes = await sendMessage<{ success: boolean; data?: string; error?: string }>('FETCH_SITE_TOKEN_KEY', {
+        url: siteData.url,
+        tokenId: token.id,
+        accessToken: siteData.accessToken,
+        cookie: siteData.cookie,
+        userId: siteData.userId,
+        authType: siteData.authType,
+      })
+      if (tokenKeyRes.success && tokenKeyRes.data) {
+        const groupName = token.group || 'default'
+        groupApiKeys[groupName] = tokenKeyRes.data
+        if (!firstApiKey) {
+          firstApiKey = tokenKeyRes.data
+          firstGroup = groupName
+        }
+      }
+    }
+
+    if (!firstApiKey) {
+      throw new Error('获取令牌密钥失败')
+    }
+
+    const providerRes = await sendMessage<{ success: boolean; data: Provider }>('ADD_PROVIDER', {
+      name: siteData.name,
+      baseUrl,
+      apiKey: firstApiKey,
+      model: '',
+      models: [],
+      apiType: 'both' as ApiType,
+      format: 'openai' as ProviderFormat,
+      groupApiKeys,
+      activeGroup: firstGroup,
+      isActive: false,
+    })
+
+    if (!providerRes.success || !providerRes.data) {
+      throw new Error('创建 Provider 失败')
+    }
+
+    setProviders(prev => [...prev, providerRes.data!])
+  }
+
   async function handleTestSite(site: Site) {
     setTestingSiteId(site.id)
     const res = await sendMessage<{ success: boolean; data: TestResult }>('TEST_SITE', site)
     if (res.success && res.data) {
       setSites(prev => prev.map(s =>
-        s.id === site.id ? { ...s, testStatus: { lastTestTime: Date.now(), isSuccess: res.data!.success, statusCode: res.data!.statusCode, errorMessage: res.data!.error } } : s
+        s.id === site.id ? { ...s, testStatus: { lastTestTime: Date.now(), isSuccess: res.data!.success, statusCode: res.data!.statusCode, errorMessage: res.data!.error, responseBody: res.data!.responseBody } } : s
       ))
     }
     setTestingSiteId(null)
   }
 
-  async function handleCheckinSite(site: Site) {
+  async function handleCheckinSite(site: Site, manual = true) {
     setCheckingInSiteId(site.id)
-    const res = await sendMessage<{ success: boolean; data?: TestResult; error?: string }>('CHECKIN_SITE', site)
-    if (!res.success) alert(`Check-in failed: ${res.error}`)
+
+    const today = localDateStr()
+
+    if (site.siteType === 'anyrouter') {
+      const res = await sendMessage<{ success: boolean; data?: TestResult; error?: string }>('CHECKIN_ANYROUTER', { site })
+      if (res.success && res.data?.success) {
+        const status = { lastTestTime: Date.now(), isSuccess: true, statusCode: res.data.statusCode, errorMessage: res.data.error, responseBody: res.data.responseBody }
+        setSites(prev => prev.map(s => s.id === site.id ? { ...s, checkinStatus: status, checkinDate: today } : s))
+        await sendMessage('UPDATE_SITE', { id: site.id, updates: { checkinStatus: status, checkinDate: today } })
+      } else {
+        const status = { lastTestTime: Date.now(), isSuccess: false, errorMessage: res.error || 'Checkin failed' }
+        setSites(prev => prev.map(s => s.id === site.id ? { ...s, checkinStatus: status, checkinDate: today } : s))
+        await sendMessage('UPDATE_SITE', { id: site.id, updates: { checkinStatus: status, checkinDate: today } })
+      }
+      setCheckingInSiteId(null)
+      return
+    }
+
+    if (site.accessToken) {
+      const tokenRes = await sendMessage<{ success: boolean; data?: TestResult; error?: string }>('CHECKIN_SITE', {
+        site: { ...site, authType: 'accessToken' as const },
+        manual,
+      })
+      if (tokenRes.success && tokenRes.data?.success) {
+        const status = { lastTestTime: Date.now(), isSuccess: true, statusCode: tokenRes.data.statusCode, errorMessage: tokenRes.data.error, responseBody: tokenRes.data.responseBody }
+        setSites(prev => prev.map(s => s.id === site.id ? { ...s, checkinStatus: status, checkinDate: today } : s))
+        await sendMessage('UPDATE_SITE', { id: site.id, updates: { checkinStatus: status, checkinDate: today } })
+        setCheckingInSiteId(null)
+        return
+      }
+    }
+
+    if (site.cookie) {
+      const cookieRes = await sendMessage<{ success: boolean; data?: TestResult; error?: string }>('CHECKIN_SITE', {
+        site: { ...site, authType: 'cookie' as const },
+        manual,
+      })
+      if (cookieRes.success && cookieRes.data) {
+        const status = { lastTestTime: Date.now(), isSuccess: cookieRes.data.success, statusCode: cookieRes.data.statusCode, errorMessage: cookieRes.data.error, responseBody: cookieRes.data.responseBody }
+        setSites(prev => prev.map(s => s.id === site.id ? { ...s, checkinStatus: status, checkinDate: today } : s))
+        await sendMessage('UPDATE_SITE', { id: site.id, updates: { checkinStatus: status, checkinDate: today } })
+      } else if (cookieRes.error) {
+        const status = { lastTestTime: Date.now(), isSuccess: false, errorMessage: cookieRes.error }
+        setSites(prev => prev.map(s => s.id === site.id ? { ...s, checkinStatus: status, checkinDate: today } : s))
+        await sendMessage('UPDATE_SITE', { id: site.id, updates: { checkinStatus: status, checkinDate: today } })
+      }
+    } else if (!site.accessToken) {
+      const status = { lastTestTime: Date.now(), isSuccess: false, errorMessage: 'No access token or cookie available' }
+      setSites(prev => prev.map(s => s.id === site.id ? { ...s, checkinStatus: status, checkinDate: today } : s))
+      await sendMessage('UPDATE_SITE', { id: site.id, updates: { checkinStatus: status, checkinDate: today } })
+    }
+
     setCheckingInSiteId(null)
   }
 
@@ -241,13 +611,25 @@ export function App() {
 
   async function handleTestAll() {
     setTestingAll(true)
-    await Promise.all(providers.map(p => sendMessage('TEST_PROVIDER', p)))
+    await Promise.all(visibleProviders.map(p => sendMessage('TEST_PROVIDER', p)))
     await loadProviders()
     setTestingAll(false)
   }
 
   async function handleSwitchModel(id: string, model: string) {
-    await sendMessage('UPDATE_PROVIDER', { id, updates: { model } })
+    const provider = providers.find(p => p.id === id)
+    if (!provider) return
+    const gm = provider.groupModels || {}
+    const ag = provider.activeGroup || 'default'
+    const currentModels = gm[ag] || provider.models || []
+    const idx = currentModels.findIndex(m => m.name === model)
+    if (idx > 0) {
+      const reordered = [currentModels[idx], ...currentModels.filter((_, i) => i !== idx)]
+      gm[ag] = reordered
+      await sendMessage('UPDATE_PROVIDER', { id, updates: { model, groupModels: gm } })
+    } else {
+      await sendMessage('UPDATE_PROVIDER', { id, updates: { model } })
+    }
     setOpenDropdownId(null)
     await loadProviders()
   }
@@ -255,36 +637,78 @@ export function App() {
   function openAdd() {
     setEditingProvider(null)
     setFormName(''); setFormBaseUrl(''); setFormApiKey(''); setFormModels([])
-    setFormNewModel(''); setFormTestModel(''); setFormTestResult(null)
+    setFormNewModel(''); setFormNewModelApiType('both'); setFormTestModel(''); setFormTestResult(null); setFormApiType('both'); setFormFormat('openai'); setFormGroupApiKeys({ default: '' }); setFormGroupModels({ default: [] }); setFormActiveGroup('default')
     setShowPanel(true)
   }
 
   function openEdit(p: Provider) {
     setEditingProvider(p)
-    setFormName(p.name); setFormBaseUrl(p.baseUrl); setFormApiKey(p.apiKey)
-    setFormModels(p.models || [p.model]); setFormNewModel('')
-    setFormTestModel(p.model); setFormTestResult(null)
+    const gk = p.groupApiKeys || { default: p.apiKey || '' }
+    const fallbackModels = p.model ? [{ name: p.model, apiType: p.apiType || 'both' }] : []
+    const gm = p.groupModels || { default: p.models || fallbackModels }
+    const ag = p.activeGroup || 'default'
+    setFormName(p.name); setFormBaseUrl(p.baseUrl); setFormApiKey(gk[ag] || p.apiKey || '')
+    setFormModels(gm[ag] || p.models || fallbackModels); setFormNewModel('')
+    setFormNewModelApiType('both'); setFormTestModel(gm[ag]?.[0]?.name || p.model); setFormTestResult(null); setFormApiType(p.apiType || 'both'); setFormFormat(p.format || 'openai'); setFormGroupApiKeys(gk); setFormGroupModels(gm); setFormActiveGroup(ag)
     setShowPanel(true)
   }
 
-  function closePanel() { setShowPanel(false); setEditingProvider(null); setFormTestResult(null) }
+  function closePanel() { setShowPanel(false); setEditingProvider(null); setFormTestResult(null); setSyncModelsError(null) }
 
   function addFormModel() {
     const m = formNewModel.trim()
-    if (m && !formModels.includes(m)) {
-      const newModels = [...formModels, m]
+    if (m && !formModels.some(x => x.name === m)) {
+      const apiType = formFormat === 'anthropic' ? 'chat' : formNewModelApiType
+      const newModels = [...formModels, { name: m, apiType }]
       setFormModels(newModels)
       setFormNewModel('')
+      setFormNewModelApiType('both')
       if (!formTestModel) setFormTestModel(m)
     }
   }
 
+  async function handleSyncModels() {
+    if (!formBaseUrl.trim()) {
+      setSyncModelsError('Base URL is required')
+      return
+    }
+    setSyncingModels(true)
+    setSyncModelsError(null)
+    const res = await sendMessage<{ success: boolean; data?: string[]; error?: string }>('FETCH_PROVIDER_MODELS', {
+      baseUrl: formBaseUrl,
+      apiKey: formApiKey || undefined,
+      format: formFormat,
+    })
+    if (res.success && res.data) {
+      const defaultApiType: ApiType = formFormat === 'anthropic' ? 'chat' : 'both'
+      const existingNames = new Set(formModels.map(m => m.name))
+      const newModels = res.data
+        .filter(name => !existingNames.has(name))
+        .map(name => ({ name, apiType: defaultApiType }))
+      setFormModels(prev => [...prev, ...newModels])
+      if (!formTestModel && newModels.length > 0) {
+        setFormTestModel(newModels[0].name)
+      }
+    } else {
+      setSyncModelsError(res.error || 'Failed to fetch models')
+    }
+    setSyncingModels(false)
+  }
+
+  function toggleModelApiType(modelName: string) {
+    setFormModels(formModels.map(m => {
+      if (m.name !== modelName) return m
+      const next: ApiType = m.apiType === 'chat' ? 'responses' : m.apiType === 'responses' ? 'both' : 'chat'
+      return { ...m, apiType: next }
+    }))
+  }
+
   function removeFormModel(m: string) {
     if (formModels.length <= 1) return
-    const newModels = formModels.filter(x => x !== m)
+    const newModels = formModels.filter(x => x.name !== m)
     setFormModels(newModels)
     if (formTestModel === m) {
-      setFormTestModel(newModels[0] || '')
+      setFormTestModel(newModels[0]?.name || '')
     }
   }
 
@@ -292,7 +716,8 @@ export function App() {
     if (!formTestModel) return
     setFormTesting(true); setFormTestResult(null)
     try {
-      const tempProvider = { id: 'temp', name: '', baseUrl: formBaseUrl, apiKey: formApiKey, model: formTestModel, models: [], isActive: false, createdAt: 0, updatedAt: 0 }
+      const testApiType = formModels.find(m => m.name === formTestModel)?.apiType || formApiType
+      const tempProvider = { id: 'temp', name: '', baseUrl: formBaseUrl, apiKey: formApiKey, model: formTestModel, models: formModels, apiType: testApiType, format: formFormat, groupApiKeys: formGroupApiKeys, activeGroup: formActiveGroup, isActive: false, createdAt: 0, updatedAt: 0 }
       const res = await sendMessage<{ success: boolean; data?: TestResult }>('TEST_PROVIDER', tempProvider)
       if (res.success && res.data) {
         setFormTestResult(res.data)
@@ -309,7 +734,8 @@ export function App() {
     setSaving(true)
     const data = {
       name: formName, baseUrl: formBaseUrl, apiKey: formApiKey,
-      model: formModels[0], models: formModels,
+      model: formModels[0]?.name || '', models: formModels, apiType: formApiType, format: formFormat,
+      groupApiKeys: { ...formGroupApiKeys, [formActiveGroup]: formApiKey }, groupModels: { ...formGroupModels, [formActiveGroup]: formModels }, activeGroup: formActiveGroup,
       isActive: editingProvider?.isActive || false,
     }
     if (editingProvider) {
@@ -336,19 +762,64 @@ export function App() {
   }
 
   function toggleSelectAll() {
-    setSelectedIds(selectedIds.size === providers.length ? new Set() : new Set(providers.map(p => p.id)))
+    setSelectedIds(selectedIds.size === visibleProviders.length ? new Set() : new Set(visibleProviders.map(p => p.id)))
   }
 
   function exitSelectMode() { setSelectMode(false); setSelectedIds(new Set()) }
 
-  function handleCopy(p: Provider) {
-    const text = `Name: ${p.name}\nBase URL: ${p.baseUrl}\nAPI Key: ${p.apiKey}\nModel: ${p.model}\nModels: ${p.models.join(', ')}`
-    copyToClipboard(text)
-    setCopiedId(p.id)
-    setTimeout(() => setCopiedId(null), 1500)
+  async function handleDrop(targetId: string) {
+    if (!dragId || dragId === targetId) { setDragId(null); setDragOverId(null); return }
+    const ids = visibleProviders.map(p => p.id)
+    const fromIdx = ids.indexOf(dragId)
+    const toIdx = ids.indexOf(targetId)
+    if (fromIdx === -1 || toIdx === -1) { setDragId(null); setDragOverId(null); return }
+    const newIds = [...ids]
+    newIds.splice(fromIdx, 1)
+    newIds.splice(toIdx, 0, dragId)
+    const reordered = newIds.map(id => visibleProviders.find(p => p.id === id)!)
+    setProviders(reordered)
+    await sendMessage('REORDER_PROVIDERS', newIds)
+    setDragId(null)
+    setDragOverId(null)
+  }
+
+  async function handleSiteDrop(targetId: string) {
+    if (!siteDragId || siteDragId === targetId) { setSiteDragId(null); setSiteDragOverId(null); return }
+    const ids = sites.map(s => s.id)
+    const fromIdx = ids.indexOf(siteDragId)
+    const toIdx = ids.indexOf(targetId)
+    if (fromIdx === -1 || toIdx === -1) { setSiteDragId(null); setSiteDragOverId(null); return }
+    const newIds = [...ids]
+    newIds.splice(fromIdx, 1)
+    newIds.splice(toIdx, 0, siteDragId)
+    const reordered = newIds.map(id => sites.find(s => s.id === id)!)
+    setSites(reordered)
+    await sendMessage('REORDER_SITES', newIds)
+    setSiteDragId(null)
+    setSiteDragOverId(null)
+  }
+
+  async function handleCopy(p: Provider) {
+    const res = await sendMessage<{ success: boolean; data: Provider }>('ADD_PROVIDER', {
+      name: p.name + ' (copy)',
+      baseUrl: p.baseUrl,
+      apiKey: p.apiKey,
+      model: p.model,
+      models: p.models,
+      apiType: p.apiType,
+      format: p.format,
+      groupApiKeys: p.groupApiKeys || {},
+      groupModels: p.groupModels || {},
+      activeGroup: p.activeGroup || 'default',
+      isActive: false,
+    })
+    if (res.success && res.data) {
+      setProviders(prev => [...prev, res.data!])
+    }
   }
 
   const chatProvider = providers.find(p => p.id === chatProviderId)
+  const visibleProviders = providers
 
   async function handleChatSend() {
     if ((!chatInput.trim() && !chatAttachment) || !chatProvider || chatStreaming) return
@@ -371,7 +842,8 @@ export function App() {
 
     try {
       const port = (chrome as any).runtime.connect({ name: 'chat-stream' })
-      port.postMessage({ baseUrl: chatProvider.baseUrl, apiKey: chatProvider.apiKey, model: chatModel, messages: newMessages })
+      const chatApiType = chatProvider.models?.find(m => m.name === chatModel)?.apiType || chatProvider.apiType || 'both'
+      port.postMessage({ baseUrl: chatProvider.baseUrl, apiKey: chatProvider.apiKey, model: chatModel, messages: newMessages, apiType: chatApiType, format: chatProvider.format || 'openai' })
 
       const chunks: string[] = []
       await new Promise<void>((resolve, reject) => {
@@ -508,7 +980,7 @@ export function App() {
 
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         <div className="rounded-xl ring-2 ring-slate-300/80 bg-white/60 overflow-visible">
-          {providers.length > 0 && (
+          {visibleProviders.length > 0 && (
             <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-slate-100 bg-slate-50/50">
               <button
                 onClick={handleTestAll}
@@ -525,7 +997,7 @@ export function App() {
               {selectMode ? (
                 <>
                   <button onClick={toggleSelectAll} className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold text-slate-500 bg-slate-50 hover:bg-slate-100 ring-1 ring-slate-200/60 transition-colors">
-                    {selectedIds.size === providers.length ? 'Deselect' : 'All'}
+                    {selectedIds.size === visibleProviders.length ? 'Deselect' : 'All'}
                   </button>
                   {selectedIds.size > 0 && (
                     <button onClick={handleDeleteSelected} className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold text-red-500 bg-red-50 hover:bg-red-100 ring-1 ring-red-200/60 transition-colors">
@@ -557,7 +1029,7 @@ export function App() {
             </div>
           )}
 
-          {providers.length === 0 ? (
+          {visibleProviders.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10 gap-2">
               <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center">
                 <svg className="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155" /></svg>
@@ -566,14 +1038,31 @@ export function App() {
             </div>
           ) : (
             <div className="p-2 space-y-1.5">
-              {providers.map(p => (
+              {visibleProviders.map(p => {
+                const isDragging = dragId === p.id
+                const isBeforeTarget = dragOverId !== null && !isDragging && (() => {
+                  const ids = visibleProviders.map(v => v.id)
+                  const dragIdx = ids.indexOf(dragId!)
+                  const overIdx = ids.indexOf(dragOverId!)
+                  const currentIdx = ids.indexOf(p.id)
+                  if (dragIdx < overIdx) return currentIdx > dragIdx && currentIdx <= overIdx
+                  if (dragIdx > overIdx) return currentIdx >= overIdx && currentIdx < dragIdx
+                  return false
+                })()
+                return (
                 <div
                   key={p.id}
-                  className={`group rounded-lg ring-2 transition-all duration-150 ${
+                  draggable={!selectMode}
+                  onDragStart={() => setDragId(p.id)}
+                  onDragOver={e => { e.preventDefault(); setDragOverId(p.id) }}
+                  onDragLeave={() => { if (dragOverId === p.id) setDragOverId(null) }}
+                  onDrop={() => handleDrop(p.id)}
+                  onDragEnd={() => { setDragId(null); setDragOverId(null) }}
+                  className={`group rounded-lg ring-2 transition-all duration-200 ${
                     selectMode ? 'cursor-default' : 'cursor-pointer'
                   } ${p.isActive ? 'ring-emerald-400 bg-emerald-50/50 shadow-sm' : 'ring-slate-200 bg-white hover:ring-slate-300'} ${
                     selectMode && selectedIds.has(p.id) ? 'ring-emerald-500 bg-emerald-50/70' : ''
-                  }`}
+                  } ${isDragging ? 'opacity-30 scale-[0.98]' : ''} ${dragOverId === p.id && dragId !== p.id ? 'ring-blue-400' : ''} ${isBeforeTarget && dragId !== null ? 'translate-y-1' : ''}`}
                   onClick={() => selectMode ? toggleSelect(p.id) : handleSetActive(p.id)}
                 >
                   <div className="flex items-start gap-2 px-2.5 py-1.5">
@@ -589,7 +1078,15 @@ export function App() {
                       <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1 transition-all ${p.isActive ? 'bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.4)]' : 'bg-slate-300'}`} />
                     )}
                     <div className="flex-1 min-w-0">
-                      <div className="text-[11px] font-semibold text-slate-700 truncate">{p.name}</div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[11px] font-semibold text-slate-700 truncate">{p.name}</span>
+                        <span className={`shrink-0 px-1 py-px text-[6px] font-bold uppercase tracking-wider rounded ring-1 ${
+                          p.format === 'anthropic' ? 'bg-orange-50 text-orange-500 ring-orange-200' : 'bg-blue-50 text-blue-500 ring-blue-200'
+                        }`}>{p.format || 'openai'}</span>
+                        {p.balance && (
+                          <span className="shrink-0 text-[9px] font-semibold text-emerald-600 bg-emerald-50 px-1 py-px rounded">{p.balance}</span>
+                        )}
+                      </div>
                       <div className="text-[9px] text-slate-400 font-mono truncate">{p.baseUrl}</div>
                       <div className="relative inline-block" ref={openDropdownId === p.id ? dropdownRef : undefined}>
                         <button
@@ -603,15 +1100,24 @@ export function App() {
                         </button>
                         {openDropdownId === p.id && (p.models || []).length > 1 && (
                           <div className="absolute left-0 top-full mt-0.5 z-30 bg-white rounded-lg shadow-lg ring-1 ring-slate-200 py-0.5 min-w-max max-h-[72px] overflow-y-auto">
-                            {(p.models || []).map(m => (
+                            {[...(p.models || [])].sort((a, b) => {
+                              if (a.name === p.model) return -1
+                              if (b.name === p.model) return 1
+                              return 0
+                            }).map(m => (
                               <button
-                                key={m}
-                                onClick={e => { e.stopPropagation(); handleSwitchModel(p.id, m) }}
-                                className={`w-full text-left px-2.5 py-1 text-[10px] font-mono hover:bg-blue-50 transition-colors whitespace-nowrap ${
-                                  m === p.model ? 'text-blue-600 font-semibold bg-blue-50/50' : 'text-slate-600'
+                                key={m.name}
+                                onClick={e => { e.stopPropagation(); handleSwitchModel(p.id, m.name) }}
+                                className={`w-full text-left px-2.5 py-1 text-[10px] font-mono hover:bg-blue-50 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+                                  m.name === p.model ? 'text-blue-600 font-semibold bg-blue-50/50' : 'text-slate-600'
                                 }`}
                               >
-                                {m}
+                                <span className={`shrink-0 px-1 py-px text-[6px] font-bold uppercase tracking-wider rounded ${
+                                  m.apiType === 'both' ? 'bg-purple-50 text-purple-500'
+                                    : m.apiType === 'responses' ? 'bg-blue-50 text-blue-500'
+                                    : 'bg-amber-50 text-amber-500'
+                                }`}>{m.apiType}</span>
+                                <span className="truncate">{m.name}</span>
                               </button>
                             ))}
                           </div>
@@ -625,7 +1131,8 @@ export function App() {
                       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shrink-0">
                         <button
                           onClick={e => { e.stopPropagation(); handleTest(p.id) }}
-                          disabled={testing !== null}
+                          disabled={testing !== null || !p.model}
+                          title={!p.model ? '请先选择模型再测试' : '测试'}
                           className="w-5 h-5 flex items-center justify-center rounded hover:bg-blue-50 transition-colors disabled:opacity-20"
                         >
                           {testing === p.id ? (
@@ -637,13 +1144,9 @@ export function App() {
                         <button
                           onClick={e => { e.stopPropagation(); handleCopy(p) }}
                           className="w-5 h-5 flex items-center justify-center rounded hover:bg-slate-100 transition-colors"
-                          title="Copy info"
+                          title="Duplicate provider"
                         >
-                          {copiedId === p.id ? (
-                            <svg className="w-2.5 h-2.5 text-emerald-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                          ) : (
-                            <svg className="w-2.5 h-2.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" /></svg>
-                          )}
+                          <svg className="w-2.5 h-2.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" /></svg>
                         </button>
                         <button
                           onClick={e => { e.stopPropagation(); openEdit(p) }}
@@ -661,7 +1164,7 @@ export function App() {
                     )}
                   </div>
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </div>
@@ -669,12 +1172,14 @@ export function App() {
 
       <div className="shrink-0 px-4 py-2 border-t border-slate-200/60 bg-white/80 backdrop-blur-sm">
         <div className="flex items-center justify-between">
-          <span className="text-[9px] text-slate-400">{providers.length} provider{providers.length !== 1 ? 's' : ''}</span>
           <div className="flex items-center gap-1.5">
             <button onClick={() => setShowSettings(true)}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 ring-1 ring-slate-200/60 transition-colors">
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.725.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.005.847c-.277.234-.42.585-.42.938 0 .09.008.178.023.263l.456 1.217a1.125 1.125 0 01-.49 1.37l-2.247 1.296a1.125 1.125 0 01-1.43-.26l-.847-1.005c-.234-.277-.585-.42-.938-.42-.09 0-.178.008-.263.023l-1.217.456a1.125 1.125 0 01-1.37-.49L8.18 10.03a1.125 1.125 0 01.26-1.43l1.005-.847c.277-.234.42-.585.42-.938 0-.09-.008-.178-.023-.263l-.456-1.217a1.125 1.125 0 01.49-1.37l2.247-1.296c.37-.216.847-.088 1.13.259l.847 1.005c.234.277.585.42.938.42.09 0 .178-.008.263-.023l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.43l-1.005.847c-.277.234-.42.585-.42.938 0 .09.008.177.023.263l-.456 1.217a1.125 1.125 0 01-.49 1.37zM15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+              className="w-7 h-7 flex items-center justify-center rounded-md bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-sm shadow-blue-500/20 hover:opacity-80 transition-opacity">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z" /></svg>
             </button>
+            <span className="text-[9px] text-slate-400">{providers.length} provider{providers.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
             <input ref={importInputRef} type="file" accept=".json" onChange={handleImportFile} className="hidden" />
             <button onClick={handleImportClick}
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-200/60 transition-colors">
@@ -731,7 +1236,7 @@ export function App() {
                 </button>
                 {chatProviderDropdownOpen && (
                   <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-40 overflow-y-auto">
-                    {providers.map(p => (
+                    {visibleProviders.map(p => (
                       <button
                         key={p.id}
                         onClick={() => { setChatProviderId(p.id); setChatModel(p.model); setChatProviderDropdownOpen(false) }}
@@ -753,13 +1258,26 @@ export function App() {
                 </button>
                 {chatModelDropdownOpen && (
                   <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-40 overflow-y-auto">
-                    {(chatProvider?.models || [chatModel]).map(m => (
+                    {[...(chatProvider?.models || [{ name: chatModel, apiType: 'both' as ApiType }])].sort((a, b) => {
+                      if (a.name === chatModel) return -1
+                      if (b.name === chatModel) return 1
+                      return 0
+                    }).map(m => (
                       <button
-                        key={m}
-                        onClick={() => { setChatModel(m); setChatModelDropdownOpen(false) }}
-                        className={`w-full px-2 py-1.5 text-[11px] font-mono text-left hover:bg-slate-50 ${m === chatModel ? 'bg-blue-50 text-blue-600' : 'text-slate-700'}`}
+                        key={m.name}
+                        onClick={() => { setChatModel(m.name); setChatModelDropdownOpen(false) }}
+                        className={`w-full px-2 py-1.5 text-[11px] font-mono text-left hover:bg-slate-50 flex items-center gap-1.5 ${m.name === chatModel ? 'bg-blue-50 text-blue-600' : 'text-slate-700'}`}
                       >
-                        {m}
+                        <button
+                          type="button"
+                          onClick={() => { if (chatProvider?.format !== 'anthropic') toggleModelApiType(m.name) }}
+                          className={`shrink-0 px-1 py-px text-[6px] font-bold uppercase tracking-wider rounded ${
+                            chatProvider?.format === 'anthropic' ? 'bg-orange-50 text-orange-500 cursor-default'
+                              : m.apiType === 'both' ? 'bg-purple-50 text-purple-500 cursor-pointer hover:opacity-80 transition-opacity'
+                              : m.apiType === 'responses' ? 'bg-blue-50 text-blue-500 cursor-pointer hover:opacity-80 transition-opacity'
+                              : 'bg-amber-50 text-amber-500 cursor-pointer hover:opacity-80 transition-opacity'
+                          }`} title={chatProvider?.format === 'anthropic' ? 'messages' : 'Click to toggle apiType'}>{chatProvider?.format === 'anthropic' ? 'msg' : m.apiType}</button>
+                        <span className="truncate">{m.name}</span>
                       </button>
                     ))}
                   </div>
@@ -897,16 +1415,161 @@ export function App() {
               </div>
 
               <div>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">Format</label>
+                <select value={formFormat} onChange={e => {
+                  const fmt = e.target.value as ProviderFormat
+                  setFormFormat(fmt)
+                  if (fmt === 'anthropic') {
+                    setFormApiType('chat')
+                    setFormModels([{ name: 'claude-3-5-sonnet-20241022', apiType: 'chat' }])
+                    setFormTestModel('claude-3-5-sonnet-20241022')
+                  }
+                }}
+                  className="w-full px-3 py-1.5 text-[12px] bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800">
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                </select>
+              </div>
+
+              <div>
                 <label className="block text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">Base URL</label>
                 <input type="url" value={formBaseUrl} onChange={e => setFormBaseUrl(e.target.value)}
                   className="w-full px-3 py-1.5 text-[12px] font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-400"
-                  placeholder="https://api.openai.com/v1" required />
+                  placeholder={formFormat === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'} required />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">Group</label>
+                {groupEditing ? (
+                  <div className="flex gap-1">
+                    <input type="text" value={groupNewName} onChange={e => setGroupNewName(e.target.value)}
+                      className="flex-1 px-3 py-1.5 text-[12px] bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800"
+                      placeholder="New group name" />
+                    <button type="button" onClick={() => {
+                      const name = groupNewName.trim()
+                      if (name && !groupOptions.includes(name)) {
+                        setFormGroupApiKeys(prev => ({ ...prev, [name]: '' }))
+                        setFormGroupModels(prev => ({ ...prev, [formActiveGroup]: formModels, [name]: [] }))
+                      }
+                      if (name) {
+                        setFormActiveGroup(name)
+                        setFormApiKey('')
+                        setFormModels([])
+                        setFormTestModel('')
+                      }
+                      setGroupNewName('')
+                      setGroupEditing(false)
+                    }}
+                      className="px-2 py-1 text-[10px] font-semibold text-white bg-blue-500 rounded-lg hover:bg-blue-600 transition-colors">Add</button>
+                    <button type="button" onClick={() => { setGroupNewName(''); setGroupEditing(false) }}
+                      className="px-2 py-1 text-[10px] font-semibold text-slate-500 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors">Cancel</button>
+                  </div>
+                ) : (
+                  <div className="flex gap-1 relative">
+                    <div className="flex-1" ref={groupDropdownRef}>
+                      <div className="w-full px-3 py-1.5 text-[12px] bg-white border border-slate-300 rounded-lg flex items-center justify-between hover:border-slate-400 transition-all text-slate-800 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100">
+                        <span onDoubleClick={() => {
+                          if (formActiveGroup === 'default') return
+                          setGroupRenamingTarget(formActiveGroup)
+                          setGroupRenameValue(formActiveGroup)
+                          setGroupRenaming(true)
+                        }}>{formActiveGroup}</span>
+                        <button type="button" onClick={() => setGroupDropdownOpen(v => !v)}
+                          className="ml-1 p-0.5 rounded hover:bg-slate-100 transition-colors">
+                          <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+                        </button>
+                      </div>
+                      {groupDropdownOpen && (
+                        <div className="absolute z-20 left-0 top-full mt-0.5 w-[calc(100%-52px)] bg-white border border-slate-200 rounded-lg shadow-lg py-0.5 max-h-40 overflow-y-auto">
+                          {groupOptions.map(g => (
+                            <div key={g}
+                              onClick={() => {
+                                setFormGroupModels(prev => ({ ...prev, [formActiveGroup]: formModels }))
+                                setFormActiveGroup(g)
+                                setFormApiKey(formGroupApiKeys[g] || '')
+                                const groupModels = formGroupModels[g] || []
+                                setFormModels(groupModels)
+                                setFormTestModel(groupModels[0]?.name || '')
+                                setGroupDropdownOpen(false)
+                              }}
+                              onDoubleClick={() => {
+                                if (g === 'default') return
+                                setGroupRenamingTarget(g)
+                                setGroupRenameValue(g)
+                                setGroupRenaming(true)
+                                setGroupDropdownOpen(false)
+                              }}
+                              className={`px-3 py-1.5 text-[12px] cursor-pointer flex items-center justify-between ${
+                                g === formActiveGroup ? 'bg-blue-50 text-blue-600 font-medium' : 'text-slate-700 hover:bg-slate-50'
+                              }`}>
+                              <span>{g}</span>
+                              {g !== 'default' && (
+                                <svg className="w-2.5 h-2.5 text-slate-300 opacity-0 group-hover:opacity-100" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" /></svg>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {groupRenaming && (
+                      <input type="text" value={groupRenameValue} onChange={e => setGroupRenameValue(e.target.value)}
+                        className="absolute z-30 left-0 top-0 flex-1 w-[calc(100%-52px)] px-3 py-1.5 text-[12px] bg-white border border-blue-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-100 transition-all text-slate-800"
+                        autoFocus
+                        placeholder={groupRenamingTarget}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            const newName = groupRenameValue.trim()
+                            if (newName && newName !== groupRenamingTarget && !groupOptions.includes(newName)) {
+                              const nextKeys = { ...formGroupApiKeys }
+                              nextKeys[newName] = nextKeys[groupRenamingTarget]
+                              delete nextKeys[groupRenamingTarget]
+                              const nextModels = { ...formGroupModels }
+                              nextModels[newName] = nextModels[groupRenamingTarget]
+                              delete nextModels[groupRenamingTarget]
+                              setFormGroupApiKeys(nextKeys)
+                              setFormGroupModels(nextModels)
+                              if (formActiveGroup === groupRenamingTarget) {
+                                setFormActiveGroup(newName)
+                              }
+                            }
+                            setGroupRenaming(false)
+                          } else if (e.key === 'Escape') {
+                            setGroupRenaming(false)
+                          }
+                        }}
+                        onBlur={() => setGroupRenaming(false)}
+                      />
+                    )}
+                    <button type="button" onClick={() => setGroupEditing(true)}
+                      className="px-2 py-1 text-[10px] font-semibold text-slate-500 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+                      title="Add group">+</button>
+                    <button type="button" onClick={() => {
+                      if (formActiveGroup === 'default') return
+                      const nextKeys = { ...formGroupApiKeys }
+                      delete nextKeys[formActiveGroup]
+                      const nextModels = { ...formGroupModels }
+                      delete nextModels[formActiveGroup]
+                      setFormGroupApiKeys(nextKeys)
+                      setFormGroupModels(nextModels)
+                      setFormActiveGroup('default')
+                      setFormApiKey(nextKeys.default || '')
+                      setFormModels(nextModels.default || [])
+                      setFormTestModel(nextModels.default?.[0]?.name || '')
+                    }}
+                      className="px-2 py-1 text-[10px] font-semibold text-red-500 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
+                      title="Delete group">-</button>
+                  </div>
+                )}
               </div>
 
               <div>
                 <label className="block text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">API Key</label>
                 <div className="relative">
-                  <input type={showApiKey ? 'text' : 'password'} value={formApiKey} onChange={e => setFormApiKey(e.target.value)}
+                  <input type={showApiKey ? 'text' : 'password'} value={formApiKey} onChange={e => {
+                    const val = e.target.value
+                    setFormApiKey(val)
+                    setFormGroupApiKeys(prev => ({ ...prev, [formActiveGroup]: val }))
+                  }}
                     className="w-full px-3 py-1.5 pr-8 text-[12px] font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-400"
                     placeholder="sk-..." />
                   <button type="button" onClick={() => setShowApiKey(!showApiKey)}
@@ -921,35 +1584,110 @@ export function App() {
               </div>
 
               <div>
-                <label className="block text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">Models</label>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Models</label>
+                  <button type="button" onClick={handleSyncModels} disabled={syncingModels || !formBaseUrl.trim()}
+                    className="flex items-center gap-0.5 px-1.5 py-0.5 text-[8px] font-semibold text-blue-500 bg-blue-50 hover:bg-blue-100 rounded transition-colors disabled:opacity-30"
+                    title="Sync models from API">
+                    {syncingModels ? (
+                      <svg className="w-2.5 h-2.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                    ) : (
+                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
+                    )}
+                    Sync
+                  </button>
+                </div>
+                {syncModelsError && (
+                  <div className="mb-1.5 text-[9px] text-red-500 bg-red-50 px-2 py-1 rounded">{syncModelsError}</div>
+                )}
+                <div className="flex gap-1 mb-1.5">
+                  {(formFormat === 'anthropic' ? ['all'] as const : ['all', 'chat', 'responses', 'both'] as const).map(f => (
+                    <button key={f} type="button" onClick={() => setFormModelFilter(f)}
+                      className={`px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider rounded transition-colors ${
+                        formModelFilter === f
+                          ? f === 'all' ? 'bg-slate-600 text-white'
+                            : f === 'both' ? 'bg-purple-500 text-white'
+                            : f === 'responses' ? 'bg-blue-500 text-white'
+                            : 'bg-amber-500 text-white'
+                          : f === 'all' ? 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                            : f === 'both' ? 'bg-purple-50 text-purple-400 hover:bg-purple-100'
+                            : f === 'responses' ? 'bg-blue-50 text-blue-400 hover:bg-blue-100'
+                            : 'bg-amber-50 text-amber-400 hover:bg-amber-100'
+                      }`}>{f === 'all' ? 'All' : f}</button>
+                  ))}
+                </div>
                 <div className="space-y-1">
                   {formModels.length === 0 && (
-                    <div className="text-[10px] text-slate-400 py-2 text-center">Add at least one model</div>
+                    <div className="text-[10px] text-slate-400 py-2 text-center">No models added</div>
                   )}
-                  {formModels.map((m, i) => (
-                    <div key={i} className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setFormTestModel(m)}
-                        className={`flex-1 px-3 py-1.5 text-[11px] font-mono border rounded-lg text-left transition-all ${
-                          m === formTestModel
-                            ? 'border-emerald-400 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
-                            : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
-                        }`}
-                      >
-                        {m}{i === 0 && <span className="text-[8px] text-blue-400 ml-1">default</span>}
-                      </button>
-                      <button type="button" onClick={() => removeFormModel(m)}
+                  {(() => {
+                    const filtered = formModels.filter(m => formModelFilter === 'all' || m.apiType === formModelFilter)
+                    const sorted = [...filtered].sort((a, b) => {
+                      if (a.name === formTestModel) return -1
+                      if (b.name === formTestModel) return 1
+                      return 0
+                    })
+                    return sorted.map((m) => (
+                    <div key={m.name} className="flex items-center gap-1.5">
+                      {editingModelName === m.name ? (
+                        <input type="text" value={editingModelValue}
+                          onChange={e => setEditingModelValue(e.target.value)}
+                          onBlur={() => {
+                            const v = editingModelValue.trim()
+                            if (v && v !== m.name && !formModels.some(x => x.name === v)) {
+                              setFormModels(formModels.map(x => x.name === m.name ? { ...x, name: v } : x))
+                              if (formTestModel === m.name) setFormTestModel(v)
+                            }
+                            setEditingModelName(null)
+                          }}
+                          onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setEditingModelName(null) } }}
+                          className="flex-1 px-2 py-1 text-[11px] font-mono border border-blue-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          autoFocus />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setFormTestModel(m.name)}
+                          onDoubleClick={() => { setEditingModelName(m.name); setEditingModelValue(m.name) }}
+                          className={`flex-1 px-3 py-1.5 text-[11px] font-mono border rounded-lg text-left transition-all flex items-center gap-1.5 ${
+                            m.name === formTestModel
+                              ? 'border-emerald-400 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                              : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => { if (formFormat !== 'anthropic') toggleModelApiType(m.name) }}
+                            className={`shrink-0 px-1 py-px text-[6px] font-bold uppercase tracking-wider rounded ${
+                              formFormat === 'anthropic' ? 'bg-orange-50 text-orange-500 cursor-default'
+                                : m.apiType === 'both' ? 'bg-purple-50 text-purple-500 cursor-pointer hover:opacity-80 transition-opacity'
+                                : m.apiType === 'responses' ? 'bg-blue-50 text-blue-500 cursor-pointer hover:opacity-80 transition-opacity'
+                                : 'bg-amber-50 text-amber-500 cursor-pointer hover:opacity-80 transition-opacity'
+                            }`} title={formFormat === 'anthropic' ? 'messages' : 'Click to toggle apiType'}>{formFormat === 'anthropic' ? 'msg' : m.apiType}</button>
+                          <span className="truncate">{m.name}</span>
+                          {m.name === sorted[0]?.name && <span className="text-[8px] text-emerald-400 ml-1 font-semibold">default</span>}
+                        </button>
+                      )}
+                      <button type="button" onClick={() => removeFormModel(m.name)}
                         className="w-5 h-5 flex items-center justify-center rounded hover:bg-red-50 transition-colors">
                         <svg className="w-2.5 h-2.5 text-slate-300 hover:text-red-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
                       </button>
                     </div>
-                  ))}
+                  ))
+                  })()}
+
                   <div className="flex gap-1.5">
                     <input type="text" value={formNewModel} onChange={e => setFormNewModel(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addFormModel() } }}
                       className="flex-1 px-3 py-1.5 text-[11px] font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-400"
                       placeholder="Add model..." />
+                    {formFormat !== 'anthropic' && (
+                      <select value={formNewModelApiType} onChange={e => setFormNewModelApiType(e.target.value as ApiType)}
+                        className="px-1.5 py-1 text-[9px] bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400">
+                        <option value="chat">Chat</option>
+                        <option value="responses">Resp</option>
+                        <option value="both">Both</option>
+                      </select>
+                    )}
                     <button type="button" onClick={addFormModel} disabled={!formNewModel.trim()}
                       className="w-7 h-7 flex items-center justify-center rounded-lg bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-30 transition-colors shrink-0">
                       <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
@@ -962,13 +1700,51 @@ export function App() {
             <div className="shrink-0 flex flex-col gap-2 pt-2 border-t border-slate-200/60">
               {formTestResult && (
                 <div className="rounded-lg bg-white ring-1 ring-slate-200/60 overflow-hidden">
-                  <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-100">
-                    <span className={`text-[11px] font-mono font-bold ${formTestResult.success ? 'text-emerald-600' : 'text-red-500'}`}>
-                      {formTestResult.statusCode ?? (formTestResult.success ? 200 : 'ERR')}
-                    </span>
-                    <span className="text-[10px] text-slate-400">{formTestResult.success ? 'OK' : formTestResult.error}</span>
-                  </div>
-                  {formTestResult.responseBody && (
+                  {formTestResult.endpoints && formTestResult.endpoints.length > 1 ? (
+                    <>
+                      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-100">
+                        <span className={`text-[11px] font-mono font-bold ${formTestResult.success ? 'text-emerald-600' : 'text-red-500'}`}>
+                          {formTestResult.success ? 'Partial/Full OK' : 'All Failed'}
+                        </span>
+                      </div>
+                      <div className="divide-y divide-slate-50">
+                        {formTestResult.endpoints.map(ep => {
+                          const isOpen = expandedEndpoint === ep.label
+                          return (
+                            <div key={ep.label}>
+                              <button
+                                type="button"
+                                onClick={() => setExpandedEndpoint(isOpen ? null : ep.label)}
+                                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-50 transition-colors"
+                              >
+                                <svg className={`w-2.5 h-2.5 text-slate-400 transition-transform ${isOpen ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" /></svg>
+                                <span className={`shrink-0 text-[7px] font-bold uppercase tracking-wider px-1 py-px rounded ${
+                                  ep.label === 'chat' ? 'bg-amber-50 text-amber-600'
+                                    : ep.label === 'responses' ? 'bg-blue-50 text-blue-600'
+                                    : 'bg-purple-50 text-purple-600'
+                                }`}>{ep.label}</span>
+                                <span className={`text-[10px] font-mono font-semibold ${ep.success ? 'text-emerald-600' : 'text-red-500'}`}>
+                                  {ep.statusCode}
+                                </span>
+                                <span className="text-[9px] text-slate-400">{ep.success ? 'OK' : ep.error}</span>
+                              </button>
+                              {isOpen && ep.responseBody && (
+                                <pre className="px-3 py-2 text-[9px] font-mono text-slate-500 bg-slate-50/50 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap break-all leading-relaxed">{ep.responseBody}</pre>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-100">
+                      <span className={`text-[11px] font-mono font-bold ${formTestResult.success ? 'text-emerald-600' : 'text-red-500'}`}>
+                        {formTestResult.statusCode ?? (formTestResult.success ? 200 : 'ERR')}
+                      </span>
+                      <span className="text-[10px] text-slate-400">{formTestResult.success ? 'OK' : formTestResult.error}</span>
+                    </div>
+                  )}
+                  {formTestResult.responseBody && (!formTestResult.endpoints || formTestResult.endpoints.length <= 1) && (
                     <pre className="px-3 py-2 text-[9px] font-mono text-slate-500 bg-slate-50/50 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap break-all leading-relaxed">{formTestResult.responseBody}</pre>
                   )}
                 </div>
@@ -982,7 +1758,7 @@ export function App() {
                     <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>Test</>
                   )}
                 </button>
-                <button type="submit" disabled={saving || formModels.length === 0}
+                <button type="submit" disabled={saving}
                   className="flex-1 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-[12px] font-semibold rounded-lg hover:from-blue-600 hover:to-indigo-700 disabled:opacity-40 transition-all shadow-md shadow-blue-500/20">
                   {saving ? 'Saving...' : 'Save'}
                 </button>
@@ -994,7 +1770,7 @@ export function App() {
 
       <div
         className={`absolute inset-0 bg-[#f8f9fb] z-10 transform transition-transform duration-200 ease-out shadow-xl ${
-          showSettings ? 'translate-x-0' : 'translate-x-full'
+          showSettings ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         <div className="h-full flex flex-col">
@@ -1007,38 +1783,240 @@ export function App() {
             </div>
           </div>
 
-          {addingSite ? (
-            <div className="flex-1 overflow-y-auto px-4 py-3">
+          {addingSite || editingSite ? (
+            <div className="flex-1 overflow-hidden px-4 py-3">
               <SiteForm
-                onSave={handleAddSite}
-                onCancel={() => setAddingSite(false)}
+                onSave={editingSite ? handleUpdateSite : handleAddSite}
+                onCancel={() => { setAddingSite(false); setEditingSite(null) }}
+                onSyncProvider={handleSyncProvider}
+                initialData={editingSite || undefined}
               />
             </div>
           ) : (
             <>
               <div className="shrink-0 px-4 py-2 border-b border-slate-100">
-                <button onClick={() => setAddingSite(true)}
+                <button onClick={() => { if (siteListRef.current) siteListScrollPos.current = siteListRef.current.scrollTop; setAddingSite(true) }}
                   className="w-full py-2 text-[11px] font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors flex items-center justify-center gap-1">
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
                   Add Site
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+              <div className="shrink-0 border-b border-slate-100 px-4 py-2">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <svg className="w-3 h-3 text-violet-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.556a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L4.34 8.08" /></svg>
+                  <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-wider">Webhook</span>
+                  {webhookEnabled && webhookUrl && (
+                    <span className="text-[8px] font-medium px-1 py-px rounded ${
+                      webhookUrl.includes('qyapi.weixin.qq.com') ? 'bg-green-50 text-green-600' :
+                      webhookUrl.includes('oapi.dingtalk.com') ? 'bg-blue-50 text-blue-600' :
+                      webhookUrl.includes('open.feishu.cn') ? 'bg-amber-50 text-amber-600' :
+                      'bg-slate-50 text-slate-500'
+                    }">{
+                      webhookUrl.includes('qyapi.weixin.qq.com') ? '企微' :
+                      webhookUrl.includes('oapi.dingtalk.com') ? '钉钉' :
+                      webhookUrl.includes('open.feishu.cn') ? '飞书' :
+                      '通用'
+                    }</span>
+                  )}
+                  <button
+                    onClick={async () => {
+                      const newVal = !webhookEnabled
+                      setWebhookEnabled(newVal)
+                      await chrome.storage.local.set({ webhook_enabled: newVal })
+                    }}
+                    className={`ml-auto relative w-7 h-4 rounded-full transition-colors ${webhookEnabled ? 'bg-violet-500' : 'bg-slate-200'}`}>
+                    <span className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${webhookEnabled ? 'translate-x-3' : ''}`} />
+                  </button>
+                </div>
+                {webhookEnabled && (
+                  <>
+                    <div className="flex gap-1">
+                      <input type="text" value={webhookUrl} onChange={async e => {
+                        const val = e.target.value
+                        setWebhookUrl(val)
+                        await chrome.storage.local.set({ webhook_url: val })
+                      }}
+                        placeholder="https://example.com/webhook"
+                        className="flex-1 px-3 py-1.5 text-[11px] bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 transition-all text-slate-800" />
+                      <button type="button" onClick={async () => {
+                        if (!webhookUrl) return
+                        setWebhookTesting(true)
+                        setWebhookTestResult(null)
+                        try {
+                          const res = await sendMessage<{ success: boolean; error?: string }>('SEND_WEBHOOK', {
+                            sites: [
+                              { name: 'Test Site 1', url: 'https://test1.example.com', autoCheckin: true, checkinDate: localDateStr(), checkinStatus: { lastTestTime: Date.now(), isSuccess: true } } as any,
+                              { name: 'Test Site 2', url: 'https://test2.example.com', autoCheckin: true, checkinDate: localDateStr(), checkinStatus: { lastTestTime: Date.now(), isSuccess: false, errorMessage: 'Timeout' } } as any,
+                              { name: 'Test Site 3', url: 'https://test3.example.com', autoCheckin: false } as any,
+                            ],
+                            today: localDateStr(),
+                          })
+                          setWebhookTestResult({ success: res.success, message: res.success ? 'Sent!' : (res.error || 'Failed') })
+                        } catch (e) {
+                          setWebhookTestResult({ success: false, message: e instanceof Error ? e.message : 'Error' })
+                        }
+                        setWebhookTesting(false)
+                        setTimeout(() => setWebhookTestResult(null), 3000)
+                      }}
+                        disabled={webhookTesting}
+                        className={`px-2 py-1 text-[9px] font-semibold rounded-lg transition-colors shrink-0 ${webhookTesting ? 'text-slate-400 bg-slate-50' : 'text-violet-600 bg-violet-50 hover:bg-violet-100'}`}
+                        title="Test webhook">{webhookTesting ? '...' : 'Test'}</button>
+                    </div>
+                    {webhookTestResult && (
+                      <div className={`mt-1 text-[9px] px-2 py-1 rounded ${webhookTestResult.success ? 'text-emerald-600 bg-emerald-50' : 'text-red-500 bg-red-50'}`}>
+                        {webhookTestResult.message}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {sites.length > 0 && (() => {
+                const autoSites = sites.filter(s => s.autoCheckin)
+                const disabledSites = sites.filter(s => !s.autoCheckin)
+                const today = localDateStr()
+                const checkedIn = autoSites.filter(s => s.checkinDate === today && s.checkinStatus?.isSuccess).length
+                const failed = autoSites.filter(s => s.checkinDate === today && s.checkinStatus && !s.checkinStatus.isSuccess).length
+                const total = autoSites.length
+                const currentList = checkinTab === 'enabled' ? autoSites : disabledSites
+                return (
+                <div className="shrink-0 border-b border-slate-100">
+                  <button onClick={() => setCheckinExpanded(v => !v)}
+                    className="w-full px-4 py-2 flex items-center gap-1.5 hover:bg-slate-50 transition-colors">
+                    <svg className={`w-2.5 h-2.5 text-slate-400 transition-transform ${checkinExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+                    <svg className="w-3 h-3 text-emerald-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-wider">Auto Check-in</span>
+                    <span className="text-[9px] text-slate-400 ml-auto">{checkedIn}/{total}</span>
+                  </button>
+                  {checkinExpanded && (
+                    <div className="px-4 pb-2">
+                      <div className="flex items-center gap-1 mb-1.5">
+                        <button onClick={() => setCheckinTab('enabled')}
+                          className={`px-2 py-0.5 text-[9px] font-semibold rounded transition-colors ${checkinTab === 'enabled' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                          已开启 ({autoSites.length})
+                        </button>
+                        <button onClick={() => setCheckinTab('disabled')}
+                          className={`px-2 py-0.5 text-[9px] font-semibold rounded transition-colors ${checkinTab === 'disabled' ? 'bg-slate-500 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                          未开启 ({disabledSites.length})
+                        </button>
+                        {checkinTab === 'enabled' && (
+                          <button
+                            onClick={handleCheckinAll}
+                            disabled={checkingInAll || checkedIn === total}
+                            className="ml-auto px-2 py-0.5 text-[9px] font-semibold text-white bg-emerald-500 rounded hover:bg-emerald-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+                          >
+                            {checkingInAll ? (
+                              <svg className="w-2.5 h-2.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                            ) : (
+                              <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                            )}
+                            一键签到
+                          </button>
+                        )}
+                      </div>
+                      {checkinTab === 'enabled' && (
+                        <div className="flex items-center gap-3 mb-1.5 text-[9px] text-slate-500">
+                          <span>总数：<span className="font-semibold text-slate-700">{total}</span></span>
+                          <span>签到成功：<span className="font-semibold text-emerald-500">{checkedIn}</span></span>
+                          <span>签到失败：<span className="font-semibold text-red-400">{failed}</span></span>
+                        </div>
+                      )}
+                      <div className="space-y-1 max-h-40 overflow-y-auto">
+                        {currentList.length === 0 ? (
+                          <div className="text-center text-[9px] text-slate-400 py-3">{checkinTab === 'enabled' ? '无已开启签到的站点' : '所有站点均已开启签到'}</div>
+                        ) : currentList.map(site => (
+                          <div key={site.id} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg ${checkinTab === 'enabled' ? 'bg-emerald-50/50 ring-1 ring-emerald-200/60' : 'bg-slate-50 ring-1 ring-slate-200/60'}`}>
+                            <span className="text-[10px] font-medium text-slate-700 truncate flex-1">{site.name}</span>
+                            {checkinTab === 'enabled' && site.checkinTimeRange?.scheduledMinute != null && (
+                              <span className="text-[8px] text-blue-400 font-medium">
+                                {site.checkinTimeRange.startHour + Math.floor(site.checkinTimeRange.scheduledMinute / 60)}:{String(site.checkinTimeRange.scheduledMinute % 60).padStart(2, '0')}
+                              </span>
+                            )}
+                            {checkinTab === 'enabled' && (
+                              <span title={site.checkinStatus ? [
+                                    `Status: ${site.checkinStatus.statusCode || (site.checkinStatus.isSuccess ? 'OK' : 'Fail')}`,
+                                    site.checkinStatus.errorMessage && `Error: ${site.checkinStatus.errorMessage}`,
+                                    site.checkinStatus.responseBody && `Response: ${site.checkinStatus.responseBody.slice(0, 200)}`,
+                                  ].filter(Boolean).join('\n') : undefined} className={`text-[8px] font-semibold px-1 py-px rounded ${
+                                site.checkinStatus?.isSuccess ? 'bg-emerald-100 text-emerald-600' : site.checkinStatus && !site.checkinStatus.isSuccess ? 'bg-red-100 text-red-500' : 'bg-slate-100 text-slate-400'
+                              }`}>
+                                {site.checkinStatus?.isSuccess ? 'Done' : site.checkinStatus && !site.checkinStatus.isSuccess ? 'Failed' : 'Pending'}
+                              </span>
+                            )}
+                            {checkinTab === 'enabled' && (
+                              <button
+                                onClick={() => handleCheckinSite(site)}
+                                disabled={checkingInSiteId === site.id}
+                                className="w-5 h-5 flex items-center justify-center rounded hover:bg-emerald-100 transition-colors disabled:opacity-40"
+                                title="Manual check-in"
+                              >
+                                {checkingInSiteId === site.id ? (
+                                  <svg className="w-2.5 h-2.5 animate-spin text-emerald-500" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                                ) : (
+                                  <svg className="w-2.5 h-2.5 text-emerald-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
+                                )}
+                              </button>
+                            )}
+                            {checkinTab === 'disabled' && (
+                              <button
+                                onClick={async () => {
+                                  const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true })
+                                  await chrome.tabs.create({ url: site.url, index: currentTab ? currentTab.index + 1 : undefined })
+                                }}
+                                className="w-5 h-5 flex items-center justify-center rounded hover:bg-slate-100 transition-colors"
+                                title="Open site"
+                              >
+                                <svg className="w-2.5 h-2.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" /></svg>
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                )
+              })()}
+
+              <div ref={siteListRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
                 {sites.length === 0 ? (
                   <div className="text-center text-[11px] text-slate-400 py-8">No sites added yet</div>
-                ) : sites.map(site => (
-                  <SiteCard
+                ) : sites.map(site => {
+                  const isDragging = siteDragId === site.id
+                  const isBeforeTarget = siteDragOverId !== null && !isDragging && (() => {
+                    const ids = sites.map(s => s.id)
+                    const dragIdx = ids.indexOf(siteDragId!)
+                    const overIdx = ids.indexOf(siteDragOverId!)
+                    const currentIdx = ids.indexOf(site.id)
+                    if (dragIdx < overIdx) return currentIdx > dragIdx && currentIdx <= overIdx
+                    if (dragIdx > overIdx) return currentIdx >= overIdx && currentIdx < dragIdx
+                    return false
+                  })()
+                  return (
+                  <div
                     key={site.id}
-                    site={site}
-                    onTest={id => handleTestSite(sites.find(s => s.id === id)!)}
-                    onCheckin={id => handleCheckinSite(sites.find(s => s.id === id)!)}
-                    onEdit={() => {}}
-                    onDelete={handleDeleteSite}
-                    testing={testingSiteId === site.id}
-                    checkingIn={checkingInSiteId === site.id}
-                  />
-                ))}
+                    draggable
+                    onDragStart={() => setSiteDragId(site.id)}
+                    onDragOver={e => { e.preventDefault(); setSiteDragOverId(site.id) }}
+                    onDragLeave={() => { if (siteDragOverId === site.id) setSiteDragOverId(null) }}
+                    onDrop={() => handleSiteDrop(site.id)}
+                    onDragEnd={() => { setSiteDragId(null); setSiteDragOverId(null) }}
+                    className={`transition-all duration-200 ${isDragging ? 'opacity-30 scale-[0.98]' : ''} ${siteDragOverId === site.id && siteDragId !== site.id ? 'ring-2 ring-blue-400 rounded-xl' : ''} ${isBeforeTarget && siteDragId !== null ? 'translate-y-1' : ''}`}
+                  >
+                    <SiteCard
+                      site={site}
+                      onTest={id => handleTestSite(sites.find(s => s.id === id)!)}
+                      onCheckin={id => handleCheckinSite(sites.find(s => s.id === id)!)}
+                      onEdit={s => { if (siteListRef.current) siteListScrollPos.current = siteListRef.current.scrollTop; setEditingSite(s) }}
+                      onDelete={handleDeleteSite}
+                      onRefreshBalance={refreshSiteBalance}
+                      testing={testingSiteId === site.id}
+                      checkingIn={checkingInSiteId === site.id}
+                      refreshingBalance={refreshingSiteId === site.id}
+                    />
+                  </div>
+                )})}
               </div>
             </>
           )}

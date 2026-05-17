@@ -6,7 +6,14 @@
   "permissions": [
     "storage",
     "sidePanel",
-    "nativeMessaging"
+    "nativeMessaging",
+    "cookies",
+    "scripting",
+    "activeTab",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
