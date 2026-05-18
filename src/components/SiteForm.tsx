@@ -62,25 +62,32 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
-          const el = document.evaluate(
+          const el1 = document.evaluate(
             '/html/body/div[1]/section/header/header/div/div/div[1]/a/div[2]/div/h4',
             document,
             null,
             XPathResult.FIRST_ORDERED_NODE_TYPE,
             null
           ).singleNodeValue
-          return el?.textContent?.trim() || ''
+          if (el1?.textContent?.trim()) return el1.textContent.trim()
+
+          const el2 = document.evaluate(
+            '/html/body/div[1]/div[2]/header/div/nav/a/span',
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null
+          ).singleNodeValue
+          if (el2?.textContent?.trim()) return el2.textContent.trim()
+
+          return ''
         },
       })
       const siteName = results?.[0]?.result || ''
 
-      if (!siteName) {
-        setImportError('未在当前页面找到站点名称，请确认页面结构')
-        setImporting(false)
-        return
+      if (siteName) {
+        setName(siteName)
       }
-
-      setName(siteName)
       setUrl(rootUrl)
 
       const cookieRes = await new Promise<{ success: boolean; data?: string; error?: string }>(resolve => {
