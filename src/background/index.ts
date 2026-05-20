@@ -2054,6 +2054,19 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
     try { parsed = JSON.parse(text) } catch {}
 
     const message = parsed.message || ''
+
+    const isCaptchaRequired = !parsed.success && (
+      message.includes('验证码') ||
+      message.includes('captcha')
+    )
+
+    if (isCaptchaRequired) {
+      console.log('[checkin] Captcha required, opening checkin page for manual verification')
+      const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
+      await chrome.tabs.create({ url: checkinPageUrl, active: true })
+      return { success: true, data: { success: false, statusCode: response.status, message: '需要验证码，已打开签到页面，请手动完成签到', error: 'captcha_required' } }
+    }
+
     const isSuccess = parsed.success === true || isAlreadyCheckedMessage(message)
     const isAlreadyChecked = isAlreadyCheckedMessage(message)
 
