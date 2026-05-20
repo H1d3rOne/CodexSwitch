@@ -1969,6 +1969,18 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
       if (isSiteContextSuccess(checkinResult)) {
         const parsed: { success?: boolean; message?: string } = checkinResult.data || {}
         const message = parsed.message || ''
+        const isCaptchaRequired = !parsed.success && (
+          message.includes('验证码') ||
+          message.includes('captcha')
+        )
+
+        if (isCaptchaRequired) {
+          console.log('[checkin] Captcha required, opening checkin page for manual verification')
+          const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
+          await chrome.tabs.create({ url: checkinPageUrl, active: true })
+          return { success: true, data: { success: false, statusCode: 0, message: '需要验证码，已打开签到页面，请手动完成签到', error: 'captcha_required' } }
+        }
+
         const isTurnstileRequired = !parsed.success && (
           message.includes('turnstile') ||
           message.includes('签名') ||
