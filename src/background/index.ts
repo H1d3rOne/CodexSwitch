@@ -1967,11 +1967,19 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
       }
 
       if (isSiteContextSuccess(checkinResult)) {
-        const parsed: { success?: boolean; message?: string } = checkinResult.data || {}
+        const parsed: { success?: boolean; message?: string; data?: any } = checkinResult.data || {}
         const message = parsed.message || ''
+        const dataStr = parsed.data ? JSON.stringify(parsed.data) : ''
+        const fullText = `${message} ${dataStr}`.toLowerCase()
+
+        console.log('[checkin] Cookie path response:', JSON.stringify(checkinResult.data).substring(0, 200))
+
         const isCaptchaRequired = !parsed.success && (
-          message.includes('验证码') ||
-          message.includes('captcha')
+          fullText.includes('验证码') ||
+          fullText.includes('captcha') ||
+          fullText.includes('请先验证') ||
+          fullText.includes('need captcha') ||
+          fullText.includes('require captcha')
         )
 
         if (isCaptchaRequired) {
@@ -2050,14 +2058,21 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
     clearTimeout(timeoutId)
     const text = await response.text()
 
-    let parsed: { success?: boolean; message?: string } = {}
+    let parsed: { success?: boolean; message?: string; data?: any } = {}
     try { parsed = JSON.parse(text) } catch {}
 
     const message = parsed.message || ''
+    const dataStr = parsed.data ? JSON.stringify(parsed.data) : ''
+    const fullText = `${message} ${dataStr}`.toLowerCase()
+
+    console.log('[checkin] Response:', response.status, text.substring(0, 200))
 
     const isCaptchaRequired = !parsed.success && (
-      message.includes('验证码') ||
-      message.includes('captcha')
+      fullText.includes('验证码') ||
+      fullText.includes('captcha') ||
+      fullText.includes('请先验证') ||
+      fullText.includes('need captcha') ||
+      fullText.includes('require captcha')
     )
 
     if (isCaptchaRequired) {
