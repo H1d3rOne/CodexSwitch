@@ -135,18 +135,21 @@ async function checkinSiteOnce(site: Site, today: string) {
   }
 
   let checkinOk = false
+  let tabOpened = false
 
   if (site.accessToken) {
-    const tokenResult = await handleCheckinSite({ site, manual: false })
+    const tokenResult = await handleCheckinSite({ site, manual: false, openTabOnFail: !tabOpened })
     if (tokenResult.success && tokenResult.data?.success) {
       checkinOk = true
       const status = { lastTestTime: Date.now(), isSuccess: true, statusCode: tokenResult.data.statusCode, errorMessage: tokenResult.data.error, responseBody: tokenResult.data.responseBody }
       await updateSite(site.id, { checkinStatus: status, checkinDate: today })
+    } else if (tokenResult.data?.error === 'checkin_failed') {
+      tabOpened = true
     }
   }
 
   if (!checkinOk && site.cookie) {
-    const cookieResult = await handleCheckinSite({ site, manual: false })
+    const cookieResult = await handleCheckinSite({ site, manual: false, openTabOnFail: !tabOpened })
     if (cookieResult.success && cookieResult.data?.success) {
       checkinOk = true
       const status = { lastTestTime: Date.now(), isSuccess: true, statusCode: cookieResult.data.statusCode, errorMessage: cookieResult.data.error, responseBody: cookieResult.data.responseBody }
@@ -1717,7 +1720,7 @@ async function turnstileAssistedCheckin(
   }
 }
 
-async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Promise<MessageResponse<TestResult>> {
+async function handleCheckinSite(payload: { site: Site; manual?: boolean; openTabOnFail?: boolean }): Promise<MessageResponse<TestResult>> {
   const { site, manual } = payload
   if (!manual && site.checkinTimeRange) {
     const now = new Date()
@@ -1977,9 +1980,11 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
 
         // Check-in failed, open page for manual handling
         if (!isSuccess && !isAlreadyChecked) {
-          console.log('[checkin] Check-in failed, opening checkin page for manual handling')
-          const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
-          await chrome.tabs.create({ url: checkinPageUrl, active: true })
+          console.log('[checkin] Check-in failed for', siteUrl)
+          if (payload.openTabOnFail) {
+            const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
+            await chrome.tabs.create({ url: checkinPageUrl, active: true })
+          }
           return { success: true, data: { success: false, statusCode: 0, message: '签到失败，已打开签到页面，请手动完成', error: message || 'checkin_failed' } }
         }
 
@@ -2043,9 +2048,11 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
 
     // Check-in failed (not success and not already checked in), open page for manual handling
     if (!isSuccess && !isAlreadyChecked) {
-      console.log('[checkin] Check-in failed, opening checkin page for manual handling')
-      const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
-      await chrome.tabs.create({ url: checkinPageUrl, active: true })
+      console.log('[checkin] Check-in failed for', siteUrl)
+      if (payload.openTabOnFail) {
+        const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
+        await chrome.tabs.create({ url: checkinPageUrl, active: true })
+      }
       return { success: true, data: { success: false, statusCode: response.status, message: '签到失败，已打开签到页面，请手动完成', error: message || 'checkin_failed' } }
     }
 
