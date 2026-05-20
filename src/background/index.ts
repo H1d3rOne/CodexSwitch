@@ -1969,46 +1969,19 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
       if (isSiteContextSuccess(checkinResult)) {
         const parsed: { success?: boolean; message?: string; data?: any } = checkinResult.data || {}
         const message = parsed.message || ''
-        const dataStr = parsed.data ? JSON.stringify(parsed.data) : ''
-        const fullText = `${message} ${dataStr}`.toLowerCase()
 
         console.log('[checkin] Cookie path response:', JSON.stringify(checkinResult.data).substring(0, 200))
 
-        const isCaptchaRequired = !parsed.success && (
-          fullText.includes('验证码') ||
-          fullText.includes('captcha') ||
-          fullText.includes('请先验证') ||
-          fullText.includes('need captcha') ||
-          fullText.includes('require captcha')
-        )
-
-        if (isCaptchaRequired) {
-          console.log('[checkin] Captcha required, opening checkin page for manual verification')
-          const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
-          await chrome.tabs.create({ url: checkinPageUrl, active: true })
-          return { success: true, data: { success: false, statusCode: 0, message: '需要验证码，已打开签到页面，请手动完成签到', error: 'captcha_required' } }
-        }
-
-        const isTurnstileRequired = !parsed.success && (
-          message.includes('turnstile') ||
-          message.includes('签名') ||
-          message.includes('校验') ||
-          message.includes('验证')
-        )
-
-        if (isTurnstileRequired) {
-          console.log('[checkin] Turnstile verification required, attempting Turnstile-assisted checkin')
-          const turnstileResult = await turnstileAssistedCheckin(siteUrl, compatHeaders, userId)
-          if (turnstileResult) {
-            if (!site.userId && userId) {
-              updateSite(site.id, { userId }).catch(() => {})
-            }
-            return { success: true, data: turnstileResult }
-          }
-        }
-
         const isSuccess = parsed.success === true || isAlreadyCheckedMessage(message)
         const isAlreadyChecked = isAlreadyCheckedMessage(message)
+
+        // Check-in failed, open page for manual handling
+        if (!isSuccess && !isAlreadyChecked) {
+          console.log('[checkin] Check-in failed, opening checkin page for manual handling')
+          const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
+          await chrome.tabs.create({ url: checkinPageUrl, active: true })
+          return { success: true, data: { success: false, statusCode: 0, message: '签到失败，已打开签到页面，请手动完成', error: message || 'checkin_failed' } }
+        }
 
         if (isSuccess) {
           sessionRefreshCooldown.delete(new URL(siteUrl).origin)
@@ -2062,28 +2035,19 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
     try { parsed = JSON.parse(text) } catch {}
 
     const message = parsed.message || ''
-    const dataStr = parsed.data ? JSON.stringify(parsed.data) : ''
-    const fullText = `${message} ${dataStr}`.toLowerCase()
 
     console.log('[checkin] Response:', response.status, text.substring(0, 200))
 
-    const isCaptchaRequired = !parsed.success && (
-      fullText.includes('验证码') ||
-      fullText.includes('captcha') ||
-      fullText.includes('请先验证') ||
-      fullText.includes('need captcha') ||
-      fullText.includes('require captcha')
-    )
-
-    if (isCaptchaRequired) {
-      console.log('[checkin] Captcha required, opening checkin page for manual verification')
-      const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
-      await chrome.tabs.create({ url: checkinPageUrl, active: true })
-      return { success: true, data: { success: false, statusCode: response.status, message: '需要验证码，已打开签到页面，请手动完成签到', error: 'captcha_required' } }
-    }
-
     const isSuccess = parsed.success === true || isAlreadyCheckedMessage(message)
     const isAlreadyChecked = isAlreadyCheckedMessage(message)
+
+    // Check-in failed (not success and not already checked in), open page for manual handling
+    if (!isSuccess && !isAlreadyChecked) {
+      console.log('[checkin] Check-in failed, opening checkin page for manual handling')
+      const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
+      await chrome.tabs.create({ url: checkinPageUrl, active: true })
+      return { success: true, data: { success: false, statusCode: response.status, message: '签到失败，已打开签到页面，请手动完成', error: message || 'checkin_failed' } }
+    }
 
     const result: TestResult = {
       success: isSuccess,
