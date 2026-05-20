@@ -135,6 +135,7 @@ async function checkinSiteOnce(site: Site, today: string) {
   }
 
   let checkinOk = false
+  let verificationBlocked = false
 
   if (site.accessToken) {
     const tokenResult = await handleCheckinSite({ site, manual: false })
@@ -142,6 +143,8 @@ async function checkinSiteOnce(site: Site, today: string) {
       checkinOk = true
       const status = { lastTestTime: Date.now(), isSuccess: true, statusCode: tokenResult.data.statusCode, errorMessage: tokenResult.data.error, responseBody: tokenResult.data.responseBody }
       await updateSite(site.id, { checkinStatus: status, checkinDate: today })
+    } else if (tokenResult.data?.error === 'verification_blocked') {
+      verificationBlocked = true
     }
   }
 
@@ -155,10 +158,19 @@ async function checkinSiteOnce(site: Site, today: string) {
       const errMsg = cookieResult.error || (cookieResult.data && !cookieResult.data.success ? cookieResult.data.error : undefined)
       const status = { lastTestTime: Date.now(), isSuccess: false, errorMessage: errMsg || 'Checkin failed' }
       await updateSite(site.id, { checkinStatus: status, checkinDate: today })
+      if (cookieResult.data?.error === 'verification_blocked') {
+        verificationBlocked = true
+      }
     }
   } else if (!checkinOk && !site.accessToken && !site.cookie) {
     const status = { lastTestTime: Date.now(), isSuccess: false, errorMessage: 'No access token or cookie available' }
     await updateSite(site.id, { checkinStatus: status, checkinDate: today })
+  }
+
+  // Only open tab once per site if verification blocked
+  if (!checkinOk && verificationBlocked) {
+    const checkinPageUrl = `${new URL(site.url.replace(/\/+$/, '')).origin}/console/personal`
+    await chrome.tabs.create({ url: checkinPageUrl, active: true })
   }
 }
 
@@ -1975,7 +1987,7 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
         const isSuccess = parsed.success === true || isAlreadyCheckedMessage(message)
         const isAlreadyChecked = isAlreadyCheckedMessage(message)
 
-        // Check-in failed due to verification/captcha, open page for manual handling
+        // Check-in failed due to verification/captcha
         if (!isSuccess && !isAlreadyChecked) {
           const fullText = `${message} ${parsed.data ? JSON.stringify(parsed.data) : ''}`.toLowerCase()
           const isVerificationBlocked = (
@@ -1987,12 +1999,7 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
             fullText.includes('校验') ||
             fullText.includes('验证')
           )
-          if (isVerificationBlocked) {
-            console.log('[checkin] Verification blocked for', siteUrl, '- opening page')
-            const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
-            await chrome.tabs.create({ url: checkinPageUrl, active: true })
-          }
-          return { success: true, data: { success: false, statusCode: 0, message: isVerificationBlocked ? '签到需要验证，已打开签到页面' : message || '签到失败', error: message || 'checkin_failed' } }
+          return { success: true, data: { success: false, statusCode: 0, message: isVerificationBlocked ? '签到需要验证' : message || '签到失败', error: isVerificationBlocked ? 'verification_blocked' : message || 'checkin_failed' } }
         }
 
         if (isSuccess) {
@@ -2053,7 +2060,7 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
     const isSuccess = parsed.success === true || isAlreadyCheckedMessage(message)
     const isAlreadyChecked = isAlreadyCheckedMessage(message)
 
-    // Check-in failed due to verification/captcha, open page for manual handling
+    // Check-in failed due to verification/captcha
     if (!isSuccess && !isAlreadyChecked) {
       const fullText = `${message} ${parsed.data ? JSON.stringify(parsed.data) : ''}`.toLowerCase()
       const isVerificationBlocked = (
@@ -2065,12 +2072,7 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
         fullText.includes('校验') ||
         fullText.includes('验证')
       )
-      if (isVerificationBlocked) {
-        console.log('[checkin] Verification blocked for', siteUrl, '- opening page')
-        const checkinPageUrl = `${new URL(siteUrl).origin}/console/personal`
-        await chrome.tabs.create({ url: checkinPageUrl, active: true })
-      }
-      return { success: true, data: { success: false, statusCode: response.status, message: isVerificationBlocked ? '签到需要验证，已打开签到页面' : message || '签到失败', error: message || 'checkin_failed' } }
+      return { success: true, data: { success: false, statusCode: response.status, message: isVerificationBlocked ? '签到需要验证' : message || '签到失败', error: isVerificationBlocked ? 'verification_blocked' : message || 'checkin_failed' } }
     }
 
     const result: TestResult = {
