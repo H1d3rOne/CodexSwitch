@@ -436,7 +436,7 @@ export function App() {
         accessToken: siteData.accessToken,
         cookie: siteData.cookie,
         userId: siteData.userId,
-        name: 'CodexSwitch',
+        name: siteData.name,
         authType: siteData.authType,
       })
 
