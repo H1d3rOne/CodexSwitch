@@ -1139,6 +1139,7 @@ async function handleCreateSiteToken(payload: { url: string; accessToken?: strin
       group: 'default',
     })
 
+    // Try with accessToken first
     if (payload.accessToken) {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 15000)
@@ -1161,17 +1162,25 @@ async function handleCreateSiteToken(payload: { url: string; accessToken?: strin
       if (response.ok) {
         const data = await response.json()
         if (data.success !== false) {
-          const key = data.data?.key || data.data?.token || data.data?.access_token || data.data
-          if (typeof key === 'string' && key.startsWith('sk-')) {
-            return { success: true, data: key }
-          }
-          if (typeof data.data === 'string' && data.data.startsWith('sk-')) {
-            return { success: true, data: data.data }
+          // AddToken doesn't return the full key, need to fetch it separately
+          const tokenId = data.data?.id
+          if (tokenId) {
+            const keyRes = await handleFetchSiteTokenKey({
+              url: baseUrl,
+              tokenId,
+              accessToken: payload.accessToken,
+              cookie: payload.cookie,
+              userId: payload.userId,
+            })
+            if (keyRes.success && keyRes.data) {
+              return { success: true, data: keyRes.data }
+            }
           }
         }
       }
     }
 
+    // Fallback: use cookie via fetchInSiteContext
     if (payload.cookie) {
       await setManualCookies(baseUrl, payload.cookie)
     }
@@ -1188,12 +1197,17 @@ async function handleCreateSiteToken(payload: { url: string; accessToken?: strin
     })
 
     if (isSiteContextSuccess(result) && result.ok && result.data) {
-      const key = result.data?.data?.key || result.data?.data?.token || result.data?.data?.access_token || result.data?.data
-      if (typeof key === 'string' && key.startsWith('sk-')) {
-        return { success: true, data: key }
-      }
-      if (typeof result.data?.data === 'string' && result.data.data.startsWith('sk-')) {
-        return { success: true, data: result.data.data }
+      const tokenId = result.data?.data?.id
+      if (tokenId) {
+        const keyRes = await handleFetchSiteTokenKey({
+          url: baseUrl,
+          tokenId,
+          cookie: payload.cookie,
+          userId: payload.userId,
+        })
+        if (keyRes.success && keyRes.data) {
+          return { success: true, data: keyRes.data }
+        }
       }
     }
 
