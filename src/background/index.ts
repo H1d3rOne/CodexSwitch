@@ -1139,83 +1139,60 @@ async function handleCreateSiteToken(payload: { url: string; accessToken?: strin
       group: 'default',
     })
 
-    // Try with accessToken first
-    if (payload.accessToken) {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 15000)
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${payload.accessToken}`,
-        ...buildCompatUserIdHeaders(payload.userId),
-      }
-
-      const response = await fetch(`${baseUrl}/api/token/`, {
-        method: 'POST',
-        signal: controller.signal,
-        headers,
-        body: tokenBody,
-      })
-
-      clearTimeout(timeoutId)
-
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success !== false) {
-          // AddToken doesn't return the full key, need to fetch it separately
-          const tokenId = data.data?.id
-          if (tokenId) {
-            const keyRes = await handleFetchSiteTokenKey({
-              url: baseUrl,
-              tokenId,
-              accessToken: payload.accessToken,
-              cookie: payload.cookie,
-              userId: payload.userId,
-            })
-            if (keyRes.success && keyRes.data) {
-              return { success: true, data: keyRes.data }
-            }
-          }
-        }
-      }
-    }
-
-    // Fallback: use cookie via fetchInSiteContext
+    // Use cookie + New-Api-User header, matching the curl pattern
     if (payload.cookie) {
       await setManualCookies(baseUrl, payload.cookie)
     }
 
-    const ctxHeaders: Record<string, string> = {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'Accept': 'application/json, text/plain, */*',
+      'Cache-Control': 'no-store',
       ...buildCompatUserIdHeaders(payload.userId),
     }
 
-    const result = await fetchInSiteContext(baseUrl, '/api/token/', {
+    // Build Cookie header from chrome.cookies API
+    try {
+      const allCookies = await chrome.cookies.getAll({ url: baseUrl })
+      const cookieHeader = allCookies.map(c => `${c.name}=${c.value}`).join('; ')
+      if (cookieHeader) {
+        headers['Cookie'] = cookieHeader
+      }
+    } catch {}
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 15000)
+
+    const response = await fetch(`${baseUrl}/api/token/`, {
       method: 'POST',
-      headers: ctxHeaders,
+      signal: controller.signal,
+      headers,
       body: tokenBody,
     })
 
-    if (isSiteContextSuccess(result) && result.ok && result.data) {
-      const tokenId = result.data?.data?.id
-      if (tokenId) {
-        const keyRes = await handleFetchSiteTokenKey({
-          url: baseUrl,
-          tokenId,
-          cookie: payload.cookie,
-          userId: payload.userId,
-        })
-        if (keyRes.success && keyRes.data) {
-          return { success: true, data: keyRes.data }
+    clearTimeout(timeoutId)
+
+    if (response.ok) {
+      const data = await response.json()
+      if (data.success !== false) {
+        // AddToken returns id but not the full key, fetch it via key API
+        const tokenId = data.data?.id
+        if (tokenId) {
+          const keyRes = await handleFetchSiteTokenKey({
+            url: baseUrl,
+            tokenId,
+            cookie: payload.cookie,
+            userId: payload.userId,
+          })
+          if (keyRes.success && keyRes.data) {
+            return { success: true, data: keyRes.data }
+          }
         }
       }
+      return { success: false, error: `创建令牌失败: ${data.message || 'unknown'}` }
     }
 
-    if (result && 'error' in result) {
-      return { success: false, error: `创建令牌失败: ${result.error}` }
-    }
-
-    return { success: false, error: '创建令牌失败。' }
+    return { success: false, error: `创建令牌失败: HTTP ${response.status}` }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
   }
