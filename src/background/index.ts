@@ -1123,7 +1123,7 @@ async function handleFetchSystemAccessToken(payload: { siteUrl: string; cookie: 
   }
 }
 
-async function handleCreateSiteToken(payload: { url: string; accessToken?: string; cookie?: string; name?: string; userId?: string; authType?: import('../types').SiteAuthType }): Promise<MessageResponse<string>> {
+async function handleCreateSiteToken(payload: { url: string; cookie?: string; name?: string; userId?: string }): Promise<MessageResponse<boolean>> {
   try {
     const baseUrl = payload.url.replace(/\/+$/, '')
     const tokenBody = JSON.stringify({
@@ -1139,7 +1139,6 @@ async function handleCreateSiteToken(payload: { url: string; accessToken?: strin
       group: 'default',
     })
 
-    // Use cookie + New-Api-User header, matching the curl pattern
     if (payload.cookie) {
       await setManualCookies(baseUrl, payload.cookie)
     }
@@ -1151,7 +1150,6 @@ async function handleCreateSiteToken(payload: { url: string; accessToken?: strin
       ...buildCompatUserIdHeaders(payload.userId),
     }
 
-    // Build Cookie header from chrome.cookies API
     try {
       const allCookies = await chrome.cookies.getAll({ url: baseUrl })
       const cookieHeader = allCookies.map(c => `${c.name}=${c.value}`).join('; ')
@@ -1175,19 +1173,7 @@ async function handleCreateSiteToken(payload: { url: string; accessToken?: strin
     if (response.ok) {
       const data = await response.json()
       if (data.success !== false) {
-        // AddToken returns id but not the full key, fetch it via key API
-        const tokenId = data.data?.id
-        if (tokenId) {
-          const keyRes = await handleFetchSiteTokenKey({
-            url: baseUrl,
-            tokenId,
-            cookie: payload.cookie,
-            userId: payload.userId,
-          })
-          if (keyRes.success && keyRes.data) {
-            return { success: true, data: keyRes.data }
-          }
-        }
+        return { success: true, data: true }
       }
       return { success: false, error: `创建令牌失败: ${data.message || 'unknown'}` }
     }

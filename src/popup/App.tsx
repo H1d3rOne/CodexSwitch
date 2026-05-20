@@ -431,38 +431,28 @@ export function App() {
 
     // No tokens found, create one then retry
     if (!tokenInfoRes.success || !tokenInfoRes.data || tokenInfoRes.data.length === 0) {
-      const createRes = await sendMessage<{ success: boolean; data?: string; error?: string }>('CREATE_SITE_TOKEN', {
+      const createRes = await sendMessage<{ success: boolean; data?: boolean; error?: string }>('CREATE_SITE_TOKEN', {
         url: siteData.url,
-        accessToken: siteData.accessToken,
         cookie: siteData.cookie,
         userId: siteData.userId,
         name: siteData.name,
-        authType: siteData.authType,
       })
 
-      if (createRes.success && createRes.data) {
-        // Token created directly, use it as the API key
-        const apiKey = createRes.data
-        const providerRes = await sendMessage<{ success: boolean; data: Provider }>('ADD_PROVIDER', {
-          name: siteData.name,
-          baseUrl,
-          apiKey,
-          model: '',
-          models: [],
-          apiType: 'both' as ApiType,
-          format: 'openai' as ProviderFormat,
-          groupApiKeys: { default: apiKey },
-          activeGroup: 'default',
-          isActive: false,
+      if (createRes.success) {
+        // Retry fetching token info after creation
+        tokenInfoRes = await sendMessage<{ success: boolean; data?: Array<{ id: number; group: string }>; error?: string }>('FETCH_SITE_TOKEN_INFO', {
+          url: siteData.url,
+          accessToken: siteData.accessToken,
+          cookie: siteData.cookie,
+          userId: siteData.userId,
+          authType: siteData.authType,
         })
-        if (!providerRes.success || !providerRes.data) {
-          throw new Error('创建 Provider 失败')
+        if (!tokenInfoRes.success || !tokenInfoRes.data || tokenInfoRes.data.length === 0) {
+          throw new Error(`创建令牌成功但获取令牌信息失败: ${tokenInfoRes.error || 'unknown'}`)
         }
-        setProviders(prev => [...prev, providerRes.data!])
-        return
+      } else {
+        throw new Error(`获取令牌信息失败且自动创建令牌失败: ${tokenInfoRes.error || 'unknown'} / ${createRes.error || 'unknown'}`)
       }
-
-      throw new Error(`获取令牌信息失败且自动创建令牌失败: ${tokenInfoRes.error || 'unknown'} / ${createRes.error || 'unknown'}`)
     }
 
     const groupApiKeys: Record<string, string> = {}
