@@ -93,7 +93,9 @@ async function performAutoCheckin(): Promise<MessageResponse> {
   })
 
   if (eligible.length > 0) {
-    await Promise.all(eligible.map(site => checkinSiteOnce(site, today)))
+    for (const site of eligible) {
+      await checkinSiteOnce(site, today)
+    }
     const updatedSites = await getSites()
     const autoSites = updatedSites.filter(s => s.autoCheckin)
     const allCheckedIn = autoSites.every(s => s.checkinDate === today && s.checkinStatus)
