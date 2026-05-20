@@ -260,7 +260,7 @@ async function handleMessage(message: Message): Promise<MessageResponse> {
         return handleFetchSiteModels(message.payload as { url: string; accessToken?: string; cookie?: string; authType?: import('../types').SiteAuthType })
 
       case 'CREATE_SITE_TOKEN':
-        return handleCreateSiteToken(message.payload as { url: string; accessToken?: string; cookie?: string; name?: string; authType?: import('../types').SiteAuthType })
+        return handleCreateSiteToken(message.payload as { url: string; accessToken?: string; cookie?: string; name?: string; userId?: string; authType?: import('../types').SiteAuthType })
 
       case 'FETCH_SITE_BALANCE':
         return handleFetchSiteBalance(message.payload as { url: string; accessToken?: string; cookie?: string; userId?: string; authType?: import('../types').SiteAuthType })
@@ -1123,31 +1123,36 @@ async function handleFetchSystemAccessToken(payload: { siteUrl: string; cookie: 
   }
 }
 
-async function handleCreateSiteToken(payload: { url: string; accessToken?: string; cookie?: string; name?: string; authType?: import('../types').SiteAuthType }): Promise<MessageResponse<string>> {
+async function handleCreateSiteToken(payload: { url: string; accessToken?: string; cookie?: string; name?: string; userId?: string; authType?: import('../types').SiteAuthType }): Promise<MessageResponse<string>> {
   try {
     const baseUrl = payload.url.replace(/\/+$/, '')
     const tokenBody = JSON.stringify({
       name: payload.name || 'CodexSwitch',
       remain_quota: 0,
+      remain_amount: 0,
       expired_time: -1,
       unlimited_quota: true,
       model_limits_enabled: false,
       model_limits: '',
+      cross_group_retry: false,
       allow_ips: '',
-      group: '',
+      group: 'default',
     })
 
     if (payload.accessToken) {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 15000)
 
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${payload.accessToken}`,
+        ...buildCompatUserIdHeaders(payload.userId),
+      }
+
       const response = await fetch(`${baseUrl}/api/token/`, {
         method: 'POST',
         signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${payload.accessToken}`,
-        },
+        headers,
         body: tokenBody,
       })
 
@@ -1171,9 +1176,14 @@ async function handleCreateSiteToken(payload: { url: string; accessToken?: strin
       await setManualCookies(baseUrl, payload.cookie)
     }
 
+    const ctxHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...buildCompatUserIdHeaders(payload.userId),
+    }
+
     const result = await fetchInSiteContext(baseUrl, '/api/token/', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: ctxHeaders,
       body: tokenBody,
     })
 
