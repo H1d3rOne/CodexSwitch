@@ -19,6 +19,7 @@ import {
 } from '../utils/storage'
 import { testProviderConnection, streamChat } from '../utils/api'
 import { exportProviders, validateExportData, importProviders } from '../utils/export'
+import { buildCheckinAttemptUpdate, isCheckinFinishedForToday, isSiteDueForAutoCheckin, isVerificationBlockedPayload } from '../utils/checkinState'
 import {
   getChatSessions,
   getActiveSessionId,
@@ -36,6 +37,9 @@ chrome.action.onClicked.addListener((tab) => {
 
 chrome.alarms.create('autoCheckin', { periodInMinutes: 1 })
 chrome.alarms.create('refreshScheduledMinute', { when: getNextMidnight(), periodInMinutes: 24 * 60 })
+
+let autoCheckinRunning = false
+const verificationTabOpenKeys = new Set<string>()
 
 function getNextMidnight(): number {
   const now = new Date()
@@ -62,60 +66,55 @@ async function refreshScheduledMinutes() {
       checkinTimeRange: { startHour, endHour, scheduledMinute },
       checkinStatus: undefined,
       checkinDate: undefined,
+      checkinFinal: undefined,
+      checkinRetryCount: undefined,
+      nextCheckinRetryAt: undefined,
+      verificationTabOpenedDate: undefined,
     })
   }
 }
 
 async function performAutoCheckin(): Promise<MessageResponse> {
-  const sites = await getSites()
-  const today = localDateStr()
-  const now = new Date()
-  const currentHour = now.getHours()
-  const currentMinute = now.getMinutes()
+  if (autoCheckinRunning) return { success: true }
 
-  const eligible = sites.filter(site => {
-    if (!site.autoCheckin) return false
-    if (site.checkinDate === today && site.checkinStatus?.isSuccess) return false
-    if (site.checkinTimeRange) {
-      const { startHour, endHour, scheduledMinute } = site.checkinTimeRange
-      if (startHour <= endHour) {
-        if (currentHour < startHour || currentHour >= endHour) return false
-      } else {
-        if (currentHour < startHour && currentHour >= endHour) return false
-      }
-      if (scheduledMinute != null) {
-        const targetHour = startHour + Math.floor(scheduledMinute / 60)
-        const targetMin = scheduledMinute % 60
-        if (currentHour < targetHour || (currentHour === targetHour && currentMinute < targetMin)) return false
-      }
-    }
-    return true
-  })
+  autoCheckinRunning = true
+  try {
+    const sites = await getSites()
+    const today = localDateStr()
+    const now = new Date()
 
-  if (eligible.length > 0) {
-    for (const site of eligible) {
-      await checkinSiteOnce(site, today)
+    const eligible = sites.filter(site => isSiteDueForAutoCheckin(site, today, now))
+
+    if (eligible.length > 0) {
+      for (const site of eligible) {
+        try {
+          await checkinSiteOnce(site, today)
+        } catch (error) {
+          await persistUnexpectedCheckinFailure(site, today, error)
+        }
+      }
+      const updatedSites = await getSites()
+      const autoSites = updatedSites.filter(s => s.autoCheckin)
+      const allCheckedIn = autoSites.every(s => isCheckinFinishedForToday(s, today))
+      if (allCheckedIn) {
+        await handleSendWebhook({ sites: updatedSites, today })
+      }
     }
-    const updatedSites = await getSites()
-    const autoSites = updatedSites.filter(s => s.autoCheckin)
-    const allCheckedIn = autoSites.every(s => s.checkinDate === today && s.checkinStatus)
-    if (allCheckedIn) {
-      await handleSendWebhook({ sites: updatedSites, today })
-    }
+    return { success: true }
+  } finally {
+    autoCheckinRunning = false
   }
-  return { success: true }
 }
 
-async function handleAnyRouterCheckin(site: Site, today: string) {
+async function handleAnyRouterCheckin(site: Site): Promise<TestResult> {
   try {
     const tab = await chrome.tabs.create({ url: site.url, active: false })
     await new Promise(resolve => setTimeout(resolve, 10000))
     try { await chrome.tabs.remove(tab.id!) } catch {}
-    const status = { lastTestTime: Date.now(), isSuccess: true, errorMessage: 'Visited site for checkin' }
-    await updateSite(site.id, { checkinStatus: status, checkinDate: today })
+    return { success: true, statusCode: 200, message: 'Visited site for checkin', responseBody: 'Visited site for checkin' }
   } catch (error) {
-    const status = { lastTestTime: Date.now(), isSuccess: false, errorMessage: error instanceof Error ? error.message : 'Checkin failed' }
-    await updateSite(site.id, { checkinStatus: status, checkinDate: today })
+    const message = error instanceof Error ? error.message : 'Checkin failed'
+    return { success: false, statusCode: 0, message, error: message }
   }
 }
 
@@ -130,50 +129,90 @@ async function handleAnyRouterCheckinMessage(payload: { site: Site }): Promise<M
   }
 }
 
+function responseToCheckinResult(response: MessageResponse<TestResult>, fallbackMessage: string): TestResult {
+  if (response.success && response.data) return response.data
+  const message = response.error || fallbackMessage
+  return { success: false, statusCode: 0, message, error: message }
+}
+
+async function persistCheckinAttempt(site: Site, today: string, result: TestResult, isRetry: boolean) {
+  const attempt = buildCheckinAttemptUpdate({
+    site,
+    result,
+    today,
+    nowMs: Date.now(),
+    isRetry,
+  })
+  await updateSite(site.id, attempt.updates)
+  if (attempt.shouldOpenVerificationTab) {
+    try {
+      await openVerificationTabOnce({ ...site, ...attempt.updates }, today)
+    } catch (error) {
+      console.error('[autoCheckin] Failed to open verification tab:', error)
+    }
+  }
+}
+
+async function persistUnexpectedCheckinFailure(site: Site, today: string, error: unknown) {
+  const message = error instanceof Error ? error.message : 'Checkin failed'
+  const isRetry = site.checkinDate === today && !!site.checkinStatus && !isCheckinFinishedForToday(site, today)
+  try {
+    await persistCheckinAttempt(site, today, {
+      success: false,
+      statusCode: 0,
+      message,
+      error: message,
+    }, isRetry)
+  } catch (persistError) {
+    console.error('[autoCheckin] Failed to persist check-in failure:', persistError)
+  }
+}
+
+async function openVerificationTabOnce(site: Site, today: string) {
+  const key = `${site.id}:${today}`
+  if (verificationTabOpenKeys.has(key)) return
+  verificationTabOpenKeys.add(key)
+
+  const checkinPageUrl = `${new URL(site.url.replace(/\/+$/, '')).origin}/console/personal`
+  await chrome.tabs.create({ url: checkinPageUrl, active: true })
+}
+
 async function checkinSiteOnce(site: Site, today: string) {
+  const isRetry = site.checkinDate === today && !!site.checkinStatus && !isCheckinFinishedForToday(site, today)
+
   if (site.siteType === 'anyrouter') {
-    await handleAnyRouterCheckin(site, today)
+    const result = await handleAnyRouterCheckin(site)
+    await persistCheckinAttempt(site, today, result, isRetry)
     return
   }
 
-  let checkinOk = false
-  let verificationBlocked = false
+  let lastResult: TestResult | null = null
+  const attemptSite = isRetry ? { ...site, checkinTimeRange: undefined } : site
 
   if (site.accessToken) {
-    const tokenResult = await handleCheckinSite({ site, manual: false })
-    if (tokenResult.success && tokenResult.data?.success) {
-      checkinOk = true
-      const status = { lastTestTime: Date.now(), isSuccess: true, statusCode: tokenResult.data.statusCode, errorMessage: tokenResult.data.error, responseBody: tokenResult.data.responseBody }
-      await updateSite(site.id, { checkinStatus: status, checkinDate: today })
-    } else if (tokenResult.data?.error === 'verification_blocked') {
-      verificationBlocked = true
+    const tokenResult = await handleCheckinSite({ site: attemptSite, manual: false })
+    lastResult = responseToCheckinResult(tokenResult, 'Access token check-in failed')
+    if (lastResult.success || lastResult.error === 'verification_blocked') {
+      await persistCheckinAttempt(site, today, lastResult, isRetry)
+      return
     }
   }
 
-  if (!checkinOk && site.cookie) {
-    const cookieResult = await handleCheckinSite({ site, manual: false })
-    if (cookieResult.success && cookieResult.data?.success) {
-      checkinOk = true
-      const status = { lastTestTime: Date.now(), isSuccess: true, statusCode: cookieResult.data.statusCode, errorMessage: cookieResult.data.error, responseBody: cookieResult.data.responseBody }
-      await updateSite(site.id, { checkinStatus: status, checkinDate: today })
-    } else {
-      const errMsg = cookieResult.error || (cookieResult.data && !cookieResult.data.success ? cookieResult.data.error : undefined)
-      const status = { lastTestTime: Date.now(), isSuccess: false, errorMessage: errMsg || 'Checkin failed' }
-      await updateSite(site.id, { checkinStatus: status, checkinDate: today })
-      if (cookieResult.data?.error === 'verification_blocked') {
-        verificationBlocked = true
-      }
-    }
-  } else if (!checkinOk && !site.accessToken && !site.cookie) {
-    const status = { lastTestTime: Date.now(), isSuccess: false, errorMessage: 'No access token or cookie available' }
-    await updateSite(site.id, { checkinStatus: status, checkinDate: today })
+  if (site.cookie) {
+    const cookieResult = await handleCheckinSite({ site: attemptSite, manual: false })
+    lastResult = responseToCheckinResult(cookieResult, 'Cookie check-in failed')
   }
 
-  // Only open tab once per site if verification blocked
-  if (!checkinOk && verificationBlocked) {
-    const checkinPageUrl = `${new URL(site.url.replace(/\/+$/, '')).origin}/console/personal`
-    await chrome.tabs.create({ url: checkinPageUrl, active: true })
+  if (!lastResult) {
+    lastResult = {
+      success: false,
+      statusCode: 0,
+      message: 'No access token or cookie available',
+      error: 'No access token or cookie available',
+    }
   }
+
+  await persistCheckinAttempt(site, today, lastResult, isRetry)
 }
 
 chrome.runtime.onMessage.addListener(
@@ -754,7 +793,7 @@ async function setManualCookies(siteUrl: string, cookieString: string): Promise<
   return allOk
 }
 
-type SiteContextFetchResult = { ok: boolean; status: number; data: any } | { error: string }
+type SiteContextFetchResult = { ok: boolean; status: number; data: any; body?: string } | { error: string; body?: string }
 
 function isSiteContextSuccess(result: SiteContextFetchResult | null): result is { ok: boolean; status: number; data: any } {
   return result != null && 'ok' in result && 'status' in result
@@ -858,7 +897,7 @@ async function fetchInSiteContext(siteUrl: string, path: string, options: { meth
           const text = await res.text()
           let data: any = null
           try { data = JSON.parse(text) } catch {}
-          return { ok: res.ok, status: res.status, data, _diag: { hasSessionCookie: hasSession, cookieLength: docCookies.length, cookieNames: docCookies.split('; ').map(c => c.split('=')[0]).join(',') } }
+          return { ok: res.ok, status: res.status, data, body: text, _diag: { hasSessionCookie: hasSession, cookieLength: docCookies.length, cookieNames: docCookies.split('; ').map(c => c.split('=')[0]).join(',') } }
         }).catch((err: any) => {
           return { error: `Fetch failed: ${err?.message || String(err)}`, _diag: { hasSessionCookie: hasSession, cookieLength: docCookies.length } }
         })
@@ -1917,7 +1956,7 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
         const text = await response.text()
         let data: any = null
         try { data = JSON.parse(text) } catch {}
-        checkinResult = { ok: response.ok, status: response.status, data }
+        checkinResult = { ok: response.ok, status: response.status, data, body: text }
         console.log('[checkin] Direct cookie header fetch result:', response.status, text.slice(0, 200))
       } catch (e) {
         console.error('[checkin] Direct cookie header fetch failed:', e)
@@ -1938,7 +1977,7 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
           const text = await response.text()
           let data: any = null
           try { data = JSON.parse(text) } catch {}
-          checkinResult = { ok: response.ok, status: response.status, data }
+          checkinResult = { ok: response.ok, status: response.status, data, body: text }
           console.log('[checkin] Compat headers fetch result:', response.status, text.slice(0, 200))
         } catch (e) {
           console.error('[checkin] Compat headers fetch failed:', e)
@@ -1969,7 +2008,7 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
               const text = await response.text()
               let data: any = null
               try { data = JSON.parse(text) } catch {}
-              checkinResult = { ok: response.ok, status: response.status, data }
+              checkinResult = { ok: response.ok, status: response.status, data, body: text }
               console.log('[checkin] Retry after session refresh:', response.status, text.slice(0, 200))
             } catch (e) {
               console.error('[checkin] Retry after session refresh failed:', e)
@@ -1991,16 +2030,12 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
 
         // Check-in failed due to verification/captcha
         if (!isSuccess && !isAlreadyChecked) {
-          const fullText = `${message} ${parsed.data ? JSON.stringify(parsed.data) : ''}`.toLowerCase()
-          const isVerificationBlocked = (
-            fullText.includes('验证码') ||
-            fullText.includes('captcha') ||
-            fullText.includes('请先验证') ||
-            fullText.includes('turnstile') ||
-            fullText.includes('签名') ||
-            fullText.includes('校验') ||
-            fullText.includes('验证')
-          )
+          const isVerificationBlocked = isVerificationBlockedPayload({
+            statusCode: checkinResult.status,
+            message,
+            data: parsed.data ?? checkinResult.data,
+            responseBody: checkinResult.body,
+          })
           return { success: true, data: { success: false, statusCode: 0, message: isVerificationBlocked ? '签到需要验证' : message || '签到失败', error: isVerificationBlocked ? 'verification_blocked' : message || 'checkin_failed' } }
         }
 
@@ -2064,16 +2099,12 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
 
     // Check-in failed due to verification/captcha
     if (!isSuccess && !isAlreadyChecked) {
-      const fullText = `${message} ${parsed.data ? JSON.stringify(parsed.data) : ''}`.toLowerCase()
-      const isVerificationBlocked = (
-        fullText.includes('验证码') ||
-        fullText.includes('captcha') ||
-        fullText.includes('请先验证') ||
-        fullText.includes('turnstile') ||
-        fullText.includes('签名') ||
-        fullText.includes('校验') ||
-        fullText.includes('验证')
-      )
+      const isVerificationBlocked = isVerificationBlockedPayload({
+        statusCode: response.status,
+        message,
+        data: parsed.data,
+        responseBody: text,
+      })
       return { success: true, data: { success: false, statusCode: response.status, message: isVerificationBlocked ? '签到需要验证' : message || '签到失败', error: isVerificationBlocked ? 'verification_blocked' : message || 'checkin_failed' } }
     }
 

@@ -100,6 +100,10 @@ export interface Site {
   testStatus?: TestStatus
   checkinStatus?: TestStatus
   checkinDate?: string
+  checkinFinal?: boolean
+  checkinRetryCount?: number
+  nextCheckinRetryAt?: number
+  verificationTabOpenedDate?: string
   cookieStatus?: CookieStatus
   autoRefreshCookie?: boolean
   createdAt: number
