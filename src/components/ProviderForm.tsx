@@ -18,6 +18,8 @@ export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) 
   const [apiType, setApiType] = useState<ApiType>(provider?.apiType || 'both')
   const [format, setFormat] = useState<ProviderFormat>(provider?.format || 'openai')
   const [showApiKey, setShowApiKey] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState('')
 
   useEffect(() => {
     if (provider) {
@@ -30,6 +32,121 @@ export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) 
       setFormat(provider.format || 'openai')
     }
   }, [provider])
+
+  const handleQuickImport = async () => {
+    setImporting(true)
+    setImportError('')
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (!tab?.id || !tab.url) {
+        setImportError('未找到当前标签页')
+        setImporting(false)
+        return
+      }
+
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          // Find post-stream container
+          const postStream = document.querySelector('.post-stream')
+          if (!postStream) return { error: '未找到 post-stream 容器' }
+
+          // Get the first div child's text content
+          const firstDiv = postStream.querySelector(':scope > div')
+          if (!firstDiv) return { error: 'post-stream 下未找到内容' }
+
+          let text = firstDiv.textContent || ''
+
+          // Try to decode base64 content first
+          const b64Pattern = /[A-Za-z0-9+/]{20,}={0,2}/g
+          let b64Match
+          while ((b64Match = b64Pattern.exec(text)) !== null) {
+            try {
+              const decoded = atob(b64Match[0])
+              // Check if decoded content looks like it contains URL or API key
+              if (decoded.match(/https?:\/\/|sk-|tp-|pk-|ak-/i)) {
+                text = decoded
+                break
+              }
+            } catch {}
+          }
+
+          // Match URL or <a> tag
+          let providerName = ''
+          let providerUrl = ''
+
+          // Try <a> tag first
+          const links = firstDiv.querySelectorAll('a')
+          for (const a of links) {
+            const href = a.href || ''
+            const linkText = a.textContent?.trim() || ''
+            if (href && (href.includes('/v1') || href.includes('api') || href.startsWith('http'))) {
+              providerUrl = href
+              providerName = linkText
+              break
+            }
+          }
+
+          // Fallback: match raw URL in text
+          if (!providerUrl) {
+            const urlMatch = text.match(/https?:\/\/[^\s<>"']+/)
+            if (urlMatch) {
+              providerUrl = urlMatch[0]
+              providerName = 'default'
+            }
+          }
+
+          if (!providerUrl) return { error: '未找到 API URL' }
+
+          // Match API keys: sk-xxx, tp-xxx, etc.
+          const keyPatterns = [
+            /\bsk-[A-Za-z0-9_-]{10,}\b/g,
+            /\btp-[A-Za-z0-9_-]{10,}\b/g,
+            /\bpk-[A-Za-z0-9_-]{10,}\b/g,
+            /\bak-[A-Za-z0-9_-]{10,}\b/g,
+          ]
+          let apiKey = ''
+          for (const pattern of keyPatterns) {
+            const match = pattern.exec(text)
+            if (match) {
+              apiKey = match[0]
+              break
+            }
+          }
+
+          return { name: providerName, url: providerUrl, apiKey }
+        },
+      })
+
+      const data = results?.[0]?.result
+      if (!data) {
+        setImportError('导入失败，未获取到结果')
+        setImporting(false)
+        return
+      }
+
+      if (data.error) {
+        setImportError(data.error)
+        setImporting(false)
+        return
+      }
+
+      if (data.name) setName(data.name)
+      if (data.url) {
+        let url = data.url
+        // Ensure URL ends with /v1 for OpenAI format
+        if (!url.endsWith('/v1') && !url.endsWith('/v1/')) {
+          url = url.replace(/\/+$/, '') + '/v1'
+        }
+        setBaseUrl(url)
+      }
+      if (data.apiKey) setApiKey(data.apiKey)
+    } catch (err) {
+      setImportError('导入失败: ' + (err instanceof Error ? err.message : 'unknown'))
+    } finally {
+      setImporting(false)
+    }
+  }
 
   const addModel = () => {
     const m = newModel.trim()
@@ -63,6 +180,16 @@ export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) 
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-700">{provider ? '编辑供应商' : '添加供应商'}</h3>
+        <button type="button" onClick={handleQuickImport} disabled={importing}
+          className="px-3 py-1.5 text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+          {importing ? '导入中...' : '一键导入'}
+        </button>
+      </div>
+      {importError && (
+        <div className="text-xs text-red-500 bg-red-50 px-2 py-1 rounded">{importError}</div>
+      )}
       <div>
         <label className="block text-sm font-medium mb-1">供应商名称</label>
         <input type="text" value={name} onChange={e => setName(e.target.value)}

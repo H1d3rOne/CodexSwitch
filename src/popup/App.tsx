@@ -92,6 +92,8 @@ export function App() {
   const [webhookEnabled, setWebhookEnabled] = useState(false)
   const [webhookTesting, setWebhookTesting] = useState(false)
   const [webhookTestResult, setWebhookTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [providerImporting, setProviderImporting] = useState(false)
+  const [providerImportError, setProviderImportError] = useState('')
 
   const dropdownRef = useRef<HTMLDivElement>(null)
   const groupDropdownRef = useRef<HTMLDivElement>(null)
@@ -687,6 +689,144 @@ export function App() {
       setFormNewModel('')
       setFormNewModelApiType('both')
       if (!formTestModel) setFormTestModel(m)
+    }
+  }
+
+  async function handleProviderQuickImport() {
+    setProviderImporting(true)
+    setProviderImportError('')
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (!tab?.id || !tab.url) {
+        setProviderImportError('未找到当前标签页')
+        setProviderImporting(false)
+        return
+      }
+
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          // Search all .cooked elements (Discourse has one per post)
+          const cookedList = document.querySelectorAll('.cooked')
+          if (!cookedList.length) return { error: '未找到内容容器' }
+
+          let providerName = ''
+          let providerUrl = ''
+          let apiKey = ''
+
+          for (const cooked of cookedList) {
+            let text = cooked.textContent || ''
+
+            // Decode all base64 encoded parts in the text
+            const b64Pattern = /[A-Za-z0-9+/]{20,}={0,2}/g
+            text = text.replace(b64Pattern, (match) => {
+              try {
+                const decoded = atob(match)
+                if (/^[\x20-\x7E\n\r\t\\]+$/.test(decoded)) {
+                  return decoded.replace(/\\(.)/g, (_, ch) => {
+                    if (ch === '/') return '/'
+                    if (ch === 'n') return '\n'
+                    if (ch === 't') return '\t'
+                    if (ch === 'r') return '\r'
+                    return ch
+                  }).replace(/\s+/g, '')
+                }
+              } catch {}
+              return match
+            })
+
+            // Deobfuscate: remove backslash before http, remove spaces in protocol and URL
+            // Handle "http s", "h ttp s", "\http", etc.
+            text = text.replace(/\\?\s*h\s*t\s*t\s*p\s*s?\s*:\s*\/\s*\/\s*/g, (m) => m.includes('s') ? 'https://' : 'http://')
+            // Remove spaces within URL-like segments (e.g. "305 90.on line" -> "30590.online")
+            // Repeat until no more spaces to merge within URLs
+            let prev = ''
+            while (prev !== text) {
+              prev = text
+              text = text.replace(/(https?:\/\/[^\s]*?)([a-zA-Z0-9])\s+([a-zA-Z0-9])/g, '$1$2$3')
+            }
+
+            // Match URL from <a> tags
+            const links = cooked.querySelectorAll('a')
+            for (const a of links) {
+              let href = a.href || ''
+              const linkText = a.textContent?.trim() || ''
+
+              // Extract real URL from Discourse redirect links (linux.do/redirect?url=...)
+              const redirectMatch = href.match(/[?&]url=([^&]+)/)
+              if (redirectMatch) {
+                try { href = decodeURIComponent(redirectMatch[1]) } catch {}
+              }
+
+              if (href && !href.includes('linux.do') && /^https?:\/\//.test(href)) {
+                providerUrl = href
+                providerName = linkText
+                break
+              }
+            }
+
+            // Fallback: match raw URL from decoded text
+            if (!providerUrl) {
+              const urlMatch = text.match(/https?:\/\/[^\s<>"']+/)
+              if (urlMatch && !urlMatch[0].includes('linux.do')) {
+                providerUrl = urlMatch[0]
+              }
+            }
+
+            if (providerUrl) {
+              // Match API keys from decoded text
+              const keyPatterns = [
+                /\bsk-[A-Za-z0-9_-]{10,}\b/g,
+                /\btp-[A-Za-z0-9_-]{10,}\b/g,
+                /\bpk-[A-Za-z0-9_-]{10,}\b/g,
+                /\bak-[A-Za-z0-9_-]{10,}\b/g,
+              ]
+              for (const pattern of keyPatterns) {
+                const match = pattern.exec(text)
+                if (match) {
+                  apiKey = match[0]
+                  break
+                }
+              }
+              break
+            }
+          }
+
+          if (!providerUrl) return { error: '未找到 API URL' }
+
+          return { name: providerName, url: providerUrl, apiKey }
+        },
+      })
+
+      const data = results?.[0]?.result as { error?: string; name?: string; url?: string; apiKey?: string } | undefined
+      if (!data) {
+        setProviderImportError('导入失败，未获取到结果')
+        setProviderImporting(false)
+        return
+      }
+
+      if (data.error) {
+        setProviderImportError(data.error)
+        setProviderImporting(false)
+        return
+      }
+
+      if (data.name) setFormName(data.name)
+      if (data.url) {
+        let url = data.url
+        if (!url.endsWith('/v1') && !url.endsWith('/v1/')) {
+          url = url.replace(/\/+$/, '') + '/v1'
+        }
+        setFormBaseUrl(url)
+      }
+      if (data.apiKey) {
+        setFormApiKey(data.apiKey)
+        setFormGroupApiKeys(prev => ({ ...prev, [formActiveGroup]: data.apiKey! }))
+      }
+    } catch (err) {
+      setProviderImportError('导入失败: ' + (err instanceof Error ? err.message : 'unknown'))
+    } finally {
+      setProviderImporting(false)
     }
   }
 
@@ -1423,10 +1563,26 @@ export function App() {
             <span className="text-[14px] font-bold text-slate-900 tracking-tight">
               {editingProvider ? 'Edit Provider' : 'New Provider'}
             </span>
-            <button onClick={closePanel} className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-slate-100 transition-colors">
-              <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button type="button" onClick={handleProviderQuickImport} disabled={providerImporting}
+                title="仅支持linux.do网站"
+                className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-200/60 rounded-lg disabled:opacity-50 transition-colors">
+                {providerImporting ? (
+                  <svg className="w-2.5 h-2.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                ) : (
+                  <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                )}
+                {providerImporting ? '导入中...' : '一键导入'}
+              </button>
+              <button onClick={closePanel} className="w-7 h-7 flex items-center justify-center rounded-md hover:bg-slate-100 transition-colors">
+                <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
           </div>
+
+          {providerImportError && (
+            <div className="mb-2 text-[9px] text-red-500 bg-red-50 px-2 py-1 rounded">{providerImportError}</div>
+          )}
 
           <form onSubmit={handleSave} className="flex-1 flex flex-col gap-3 min-h-0">
             <div className="flex-1 overflow-y-auto flex flex-col gap-3 min-h-0">
