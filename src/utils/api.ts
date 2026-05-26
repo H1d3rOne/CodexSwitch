@@ -11,6 +11,11 @@ interface TestEndpoint {
   label: string
 }
 
+interface ParsedBody {
+  isJson: boolean
+  data?: any
+}
+
 const TEST_PROMPTS = ['Hi', 'Yes', 'No', 'Ok', 'Good', 'Bad', 'It', 'If', 'Then', 'Maybe', 'Yeah']
 function randomPrompt(): string { return TEST_PROMPTS[Math.floor(Math.random() * TEST_PROMPTS.length)] }
 
@@ -42,7 +47,7 @@ function buildTestEndpoints(baseUrl: string, model: string, apiType: ApiType, fo
     const responsesUrl = base.includes('/v1') ? `${base}/responses` : `${base}/v1/responses`
     endpoints.push({
       url: responsesUrl,
-      body: { model, input: prompt, max_output_tokens: 5 },
+      body: { model, input: [{ role: 'user', content: prompt }], max_output_tokens: 5 },
       label: 'responses',
     })
   }
@@ -59,6 +64,27 @@ async function doTest(url: string, headers: Record<string, string>, body: object
   })
   const bodyText = await response.text()
   return { ok: response.ok, status: response.status, body: bodyText }
+}
+
+function parseBody(body: string): ParsedBody {
+  try {
+    return { isJson: true, data: JSON.parse(body) }
+  } catch {
+    return { isJson: false }
+  }
+}
+
+function extractErrorMessage(data: any): string | undefined {
+  const error = data?.error
+  if (!error) return undefined
+  if (typeof error === 'string') return error
+  if (typeof error?.message === 'string' && error.message.trim()) return error.message
+  if (typeof data?.message === 'string' && data.message.trim()) return data.message
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return 'API returned error'
+  }
 }
 
 export async function testProviderConnection(
@@ -92,18 +118,18 @@ export async function testProviderConnection(
     for (const endpoint of endpoints) {
       const result = await doTest(endpoint.url, headers, endpoint.body, controller.signal)
       const truncatedBody = truncateBody(result.body)
-      let isJson = false
-      try { JSON.parse(result.body); isJson = true } catch {}
 
       if (result.ok) {
         results.push({ label: endpoint.label, success: true, statusCode: result.status, responseBody: truncatedBody })
       } else {
+        const parsed = parseBody(result.body)
+        const jsonError = parsed.isJson ? extractErrorMessage(parsed.data) : undefined
         results.push({
           label: endpoint.label,
           success: false,
           statusCode: result.status,
           responseBody: truncatedBody,
-          error: `${result.status}`,
+          error: jsonError || `${result.status}`,
         })
       }
     }

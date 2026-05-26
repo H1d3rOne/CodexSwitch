@@ -17,6 +17,23 @@ async function copyToClipboard(text: string) {
   try { await navigator.clipboard.writeText(text) } catch {}
 }
 
+interface FormatModelDraft {
+  groupModels: Record<string, ModelEntry[]>
+  testModel: string
+}
+
+function createEmptyFormatModelDrafts(): Record<ProviderFormat, FormatModelDraft> {
+  return {
+    openai: { groupModels: { default: [] }, testModel: '' },
+    anthropic: { groupModels: { default: [] }, testModel: '' },
+  }
+}
+
+function createEmptyGroupModels(groupApiKeys: Record<string, string>, activeGroup: string): Record<string, ModelEntry[]> {
+  const groups = new Set([...Object.keys(groupApiKeys), activeGroup, 'default'])
+  return Object.fromEntries([...groups].map(group => [group, []]))
+}
+
 export function App() {
   const [providers, setProviders] = useState<Provider[]>([])
   const [activeProvider, setActiveProvider] = useState<Provider | null>(null)
@@ -44,6 +61,7 @@ export function App() {
   const [formFormat, setFormFormat] = useState<ProviderFormat>('openai')
   const [formGroupApiKeys, setFormGroupApiKeys] = useState<Record<string, string>>({ default: '' })
   const [formGroupModels, setFormGroupModels] = useState<Record<string, ModelEntry[]>>({ default: [] })
+  const [formatModelDrafts, setFormatModelDrafts] = useState<Record<ProviderFormat, FormatModelDraft>>(createEmptyFormatModelDrafts)
   const [formActiveGroup, setFormActiveGroup] = useState('default')
   const [groupEditing, setGroupEditing] = useState(false)
   const [groupNewName, setGroupNewName] = useState('')
@@ -663,6 +681,7 @@ export function App() {
     setEditingProvider(null)
     setFormName(''); setFormBaseUrl(''); setFormApiKey(''); setFormModels([])
     setFormNewModel(''); setFormNewModelApiType('both'); setFormTestModel(''); setFormTestResult(null); setFormApiType('both'); setFormFormat('openai'); setFormGroupApiKeys({ default: '' }); setFormGroupModels({ default: [] }); setFormActiveGroup('default')
+    setFormatModelDrafts(createEmptyFormatModelDrafts())
     setShowPanel(true)
   }
 
@@ -672,13 +691,47 @@ export function App() {
     const fallbackModels = p.model ? [{ name: p.model, apiType: p.apiType || 'both' }] : []
     const gm = p.groupModels || { default: p.models || fallbackModels }
     const ag = p.activeGroup || 'default'
+    const format = p.format || 'openai'
+    const drafts = createEmptyFormatModelDrafts()
+    drafts[format] = { groupModels: gm, testModel: gm[ag]?.[0]?.name || p.model || '' }
     setFormName(p.name); setFormBaseUrl(p.baseUrl); setFormApiKey(gk[ag] || p.apiKey || '')
     setFormModels(gm[ag] || p.models || fallbackModels); setFormNewModel('')
-    setFormNewModelApiType('both'); setFormTestModel(gm[ag]?.[0]?.name || p.model); setFormTestResult(null); setFormApiType(p.apiType || 'both'); setFormFormat(p.format || 'openai'); setFormGroupApiKeys(gk); setFormGroupModels(gm); setFormActiveGroup(ag)
+    setFormNewModelApiType('both'); setFormTestModel(gm[ag]?.[0]?.name || p.model); setFormTestResult(null); setFormApiType(p.apiType || 'both'); setFormFormat(format); setFormGroupApiKeys(gk); setFormGroupModels(gm); setFormatModelDrafts(drafts); setFormActiveGroup(ag)
     setShowPanel(true)
   }
 
   function closePanel() { setShowPanel(false); setEditingProvider(null); setFormTestResult(null); setSyncModelsError(null) }
+
+  function handleFormFormatChange(fmt: ProviderFormat) {
+    if (fmt === formFormat) return
+
+    const currentGroupModels = { ...formGroupModels, [formActiveGroup]: formModels }
+    const nextDrafts: Record<ProviderFormat, FormatModelDraft> = {
+      ...formatModelDrafts,
+      [formFormat]: { groupModels: currentGroupModels, testModel: formTestModel },
+    }
+
+    const targetDraft = nextDrafts[fmt]
+    const targetGroupModels = {
+      ...createEmptyGroupModels(formGroupApiKeys, formActiveGroup),
+      ...targetDraft.groupModels,
+    }
+    const targetModels = targetGroupModels[formActiveGroup] || []
+    const targetTestModel = targetModels.some(m => m.name === targetDraft.testModel)
+      ? targetDraft.testModel
+      : (targetModels[0]?.name || '')
+
+    setFormatModelDrafts(nextDrafts)
+    setFormFormat(fmt)
+    setFormGroupModels(targetGroupModels)
+    setFormModels(targetModels)
+    setFormTestModel(targetTestModel)
+    setFormNewModel('')
+    setFormTestResult(null)
+    if (fmt === 'anthropic') {
+      setFormApiType('chat')
+    }
+  }
 
   function addFormModel() {
     const m = formNewModel.trim()
@@ -1595,15 +1648,7 @@ export function App() {
 
               <div>
                 <label className="block text-[10px] font-semibold text-slate-500 mb-1 uppercase tracking-wider">Format</label>
-                <select value={formFormat} onChange={e => {
-                  const fmt = e.target.value as ProviderFormat
-                  setFormFormat(fmt)
-                  if (fmt === 'anthropic') {
-                    setFormApiType('chat')
-                    setFormModels([{ name: 'claude-3-5-sonnet-20241022', apiType: 'chat' }])
-                    setFormTestModel('claude-3-5-sonnet-20241022')
-                  }
-                }}
+                <select value={formFormat} onChange={e => handleFormFormatChange(e.target.value as ProviderFormat)}
                   className="w-full px-3 py-1.5 text-[12px] bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800">
                   <option value="openai">OpenAI</option>
                   <option value="anthropic">Anthropic</option>

@@ -1,139 +1,83 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { testProviderConnection } from '../../src/utils/api'
 
 global.fetch = vi.fn()
+
+function mockFetchResponse(ok: boolean, status: number, body: unknown) {
+  ;(fetch as any).mockResolvedValueOnce({
+    ok,
+    status,
+    text: async () => typeof body === 'string' ? body : JSON.stringify(body),
+  })
+}
 
 describe('API Utility', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
-  it('should return success with statusCode 200', async () => {
-    (fetch as any).mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ choices: [{ message: { content: 'Hello!' } }] }),
-    })
 
-    const result = await testProviderConnection('https://api.test.com', 'test-key')
+  it('returns success for a valid chat/completions test response', async () => {
+    mockFetchResponse(true, 200, { choices: [{ message: { content: 'Hello!' } }] })
+
+    const result = await testProviderConnection('https://api.test.com', 'test-key', 'gpt-test', 'chat')
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api.test.com/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' })
+    )
     expect(result.success).toBe(true)
     expect(result.statusCode).toBe(200)
-    expect(result.message).toBe('200')
+    expect(result.message).toBe('All endpoints OK (chat)')
     expect(result.responseBody).toBeDefined()
   })
 
-  it('should return error with statusCode 401', async () => {
-    (fetch as any).mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      statusText: 'Unauthorized',
-      text: async () => '{"error":"Unauthorized"}',
-    })
+  it.each([401, 403, 500])('returns an HTTP %s failure for chat tests', async (status) => {
+    mockFetchResponse(false, status, { error: `HTTP ${status}` })
 
-    const result = await testProviderConnection('https://api.test.com', 'invalid-key')
+    const result = await testProviderConnection('https://api.test.com', 'test-key', 'gpt-test', 'chat')
+
     expect(result.success).toBe(false)
-    expect(result.statusCode).toBe(401)
+    expect(result.statusCode).toBe(status)
+    expect(result.error).toBe(`chat: HTTP ${status}`)
   })
 
-  it('should return error with statusCode 403', async () => {
-    (fetch as any).mockResolvedValueOnce({
-      ok: false,
-      status: 403,
-      statusText: 'Forbidden',
-      text: async () => '{"error":"Forbidden"}',
-    })
+  it('sends Responses API input as a list, not a string', async () => {
+    mockFetchResponse(true, 200, { id: 'resp_123', output_text: 'ok' })
 
-    const result = await testProviderConnection('https://api.test.com', 'test-key')
-    expect(result.success).toBe(false)
-    expect(result.statusCode).toBe(403)
-  })
+    const result = await testProviderConnection('https://api.test.com/v1', 'test-key', 'gpt-test', 'responses')
+    const requestBody = JSON.parse((fetch as any).mock.calls[0][1].body)
 
-  it('should return error with statusCode 500', async () => {
-    (fetch as any).mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-      statusText: 'Internal Server Error',
-      text: async () => '{"error":"Internal Server Error"}',
-    })
-
-    const result = await testProviderConnection('https://api.test.com', 'test-key')
-    expect(result.success).toBe(false)
-    expect(result.statusCode).toBe(500)
-  })
-
-
-
-  it('should retry with /v1 and return correctedBaseUrl when first 200 response is not valid JSON', async () => {
-    ;(fetch as any)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => '<html>ok</html>',
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ choices: [{ message: { content: 'Hello from v1!' } }] }),
-      })
-
-    const result = await testProviderConnection('https://api.test.com', 'test-key')
-
-    expect(fetch).toHaveBeenNthCalledWith(
-      1,
-      'https://api.test.com/responses',
-      expect.objectContaining({ method: 'POST' })
-    )
-    expect(fetch).toHaveBeenNthCalledWith(
-      2,
+    expect(fetch).toHaveBeenCalledWith(
       'https://api.test.com/v1/responses',
       expect.objectContaining({ method: 'POST' })
     )
+    expect(Array.isArray(requestBody.input)).toBe(true)
+    expect(requestBody.input[0]).toMatchObject({ role: 'user', content: expect.any(String) })
+    expect(result.success).toBe(true)
+  })
+
+  it('keeps HTTP 200 SSE-style responses green without requiring the whole body to be JSON', async () => {
+    mockFetchResponse(true, 200, [
+      'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant","content":""},"index":0}]}',
+      '',
+      'event: response.created',
+      'data: {"type":"response.created","response":{"id":"resp_test","object":"response","status":"in_progress","error":null}}',
+      '',
+    ].join('\n'))
+
+    const result = await testProviderConnection('https://api.test.com/v1', 'test-key', 'gpt-test', 'responses')
+
     expect(result).toMatchObject({
       success: true,
       statusCode: 200,
-      correctedBaseUrl: 'https://api.test.com/v1',
+      message: 'All endpoints OK (responses)',
     })
   })
 
+  it('returns error without statusCode for network failure', async () => {
+    ;(fetch as any).mockRejectedValueOnce(new Error('Network error'))
 
-
-  it('should return the second test result when /v1 retry still fails', async () => {
-    ;(fetch as any)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => '<html>first gateway page</html>',
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        text: async () => '{"error":"retry unauthorized"}',
-      })
-
-    const result = await testProviderConnection('https://api.test.com', 'test-key')
-
-    expect(fetch).toHaveBeenNthCalledWith(
-      1,
-      'https://api.test.com/responses',
-      expect.objectContaining({ method: 'POST' })
-    )
-    expect(fetch).toHaveBeenNthCalledWith(
-      2,
-      'https://api.test.com/v1/responses',
-      expect.objectContaining({ method: 'POST' })
-    )
-    expect(result).toMatchObject({
-      success: false,
-      statusCode: 401,
-      message: '401',
-      error: '401',
-      responseBody: '{"error":"retry unauthorized"}',
-    })
-  })
-
-  it('should return error without statusCode for network failure', async () => {
-    (fetch as any).mockRejectedValueOnce(new Error('Network error'))
-
-    const result = await testProviderConnection('https://api.test.com', 'test-key')
+    const result = await testProviderConnection('https://api.test.com', 'test-key', 'gpt-test', 'chat')
     expect(result.success).toBe(false)
     expect(result.statusCode).toBeUndefined()
     expect(result.message).toBe('Error')
