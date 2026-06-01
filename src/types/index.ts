@@ -13,6 +13,7 @@ export type ProviderFormat = 'openai' | 'anthropic'
 export interface ModelEntry {
   name: string
   apiType: ApiType
+  format?: ProviderFormat
 }
 
 export interface Provider {
@@ -25,6 +26,8 @@ export interface Provider {
   activeGroup: string
   model: string
   models: ModelEntry[]
+  formatModels?: Partial<Record<ProviderFormat, ModelEntry[]>>
+  formatGroupModels?: Partial<Record<ProviderFormat, Record<string, ModelEntry[]>>>
   apiType: ApiType
   format: ProviderFormat
   isActive: boolean
@@ -128,6 +131,8 @@ export interface ExportData {
     activeGroup: string
     model: string
     models: ModelEntry[]
+    formatModels?: Partial<Record<ProviderFormat, ModelEntry[]>>
+    formatGroupModels?: Partial<Record<ProviderFormat, Record<string, ModelEntry[]>>>
     apiType: ApiType
     format: ProviderFormat
   }>

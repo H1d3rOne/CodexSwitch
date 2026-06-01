@@ -10,7 +10,9 @@
     "cookies",
     "scripting",
     "activeTab",
-    "alarms"
+    "alarms",
+    "clipboardRead",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "<all_urls>"

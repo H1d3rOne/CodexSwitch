@@ -1,4 +1,4 @@
-import type { TestResult, ChatMessage, ApiType, ModelEntry, EndpointDetail, ProviderFormat } from '../types'
+import type { TestResult, ChatMessage, ApiType, ProviderFormat } from '../types'
 
 function truncateBody(body: string, maxLen: number = 2000): string {
   if (body.length <= maxLen) return body

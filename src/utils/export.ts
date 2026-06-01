@@ -1,4 +1,5 @@
-import type { Provider, ExportData, ApiType, ProviderFormat } from '../types'
+import type { Provider, ExportData, ApiType } from '../types'
+import { normalizeFormatGroupModels, normalizeGroupModelsForFormat, normalizeModelList } from './modelFormat'
 
 export function exportProviders(providers: Provider[]): ExportData {
   return {
@@ -10,6 +11,7 @@ export function exportProviders(providers: Provider[]): ExportData {
       apiKey: p.apiKey,
       groupApiKeys: p.groupApiKeys || { default: p.apiKey || '' },
       groupModels: p.groupModels || { default: p.models || [] },
+      formatGroupModels: p.formatGroupModels,
       activeGroup: p.activeGroup || 'default',
       model: p.model,
       models: p.models,
@@ -65,18 +67,23 @@ export function importProviders(data: ExportData): Array<Omit<Provider, 'id' | '
   return data.providers.map(p => {
     const groupApiKeys = p.groupApiKeys || { default: p.apiKey || '' }
     const activeGroup = p.activeGroup || 'default'
-    const models = p.models || [{ name: p.model || 'gpt-3.5-turbo', apiType: (p.apiType || 'both') as ApiType }]
+    const format = p.format || 'openai'
+    const fallbackApiType = format === 'anthropic' ? 'chat' : ((p.apiType || 'both') as ApiType)
+    const models = normalizeModelList(p.models || (p.model ? [{ name: p.model, apiType: fallbackApiType, format }] : []), fallbackApiType, format)
+    const groupModels = normalizeGroupModelsForFormat(p.groupModels || { default: models }, format, fallbackApiType)
+    const formatGroupModels = normalizeFormatGroupModels(p.formatGroupModels)
     return {
       name: p.name,
       baseUrl: p.baseUrl,
       apiKey: groupApiKeys[activeGroup] || p.apiKey || '',
       groupApiKeys,
-      groupModels: p.groupModels || { default: models },
+      groupModels,
+      formatGroupModels,
       activeGroup,
-      model: p.model || 'gpt-3.5-turbo',
+      model: models.some(m => m.name === p.model) ? p.model : (models[0]?.name || ''),
       models,
-      apiType: p.apiType || 'both',
-      format: p.format || 'openai',
+      apiType: p.apiType || fallbackApiType,
+      format,
       isActive: false,
     }
   })

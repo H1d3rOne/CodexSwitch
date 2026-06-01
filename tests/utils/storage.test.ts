@@ -122,4 +122,45 @@ describe('Storage Utility', () => {
     const sites = await getSites()
     expect(sites).toEqual([])
   })
+
+  it('should drop auto models and keep OpenAI/Anthropic model lists separated', async () => {
+    mockStorage.codex_switch_data = {
+      providers: [
+        {
+          id: 'mixed-provider',
+          name: 'Mixed Provider',
+          baseUrl: 'https://api.test.com',
+          apiKey: 'test-key',
+          model: 'auto',
+          models: [
+            { name: 'auto', apiType: 'both' },
+            { name: 'auto', apiType: 'chat' },
+            { name: 'gpt-4.1', apiType: 'both' },
+            { name: 'claude-3-5-sonnet-20241022', apiType: 'chat' },
+          ],
+          groupModels: {
+            default: [
+              { name: 'auto', apiType: 'both' },
+              { name: 'gpt-4.1', apiType: 'both' },
+              { name: 'claude-3-5-sonnet-20241022', apiType: 'chat' },
+            ],
+          },
+          activeGroup: 'default',
+          format: 'openai',
+          isActive: false,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      activeProviderId: null,
+      sites: [],
+    }
+
+    const [provider] = await getProviders()
+
+    expect(provider.models.map(m => m.name)).toEqual(['gpt-4.1'])
+    expect(provider.model).toBe('gpt-4.1')
+    expect(provider.groupModels.default.map(m => m.name)).toEqual(['gpt-4.1'])
+    expect(provider.formatGroupModels?.anthropic?.default.map(m => m.name)).toEqual(['claude-3-5-sonnet-20241022'])
+  })
 })

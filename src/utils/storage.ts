@@ -1,4 +1,13 @@
 import type { Provider, Site, StorageData } from '../types'
+import {
+  filterModelsForFormat,
+  hasAnyModels,
+  normalizeFormatGroupModels,
+  normalizeFormatModels,
+  normalizeGroupModelsForFormat,
+  normalizeModelList,
+  splitGroupModelsByFormat,
+} from './modelFormat'
 import { generateUUID } from './uuid'
 
 const STORAGE_KEY = 'codex_switch_data'
@@ -10,14 +19,36 @@ async function getStorageData(): Promise<StorageData> {
   const providers = Array.isArray(raw.providers) ? raw.providers : []
   // Migrate existing providers without format/groupApiKeys fields
   const migratedProviders = providers.map((p: Provider) => {
+    const format = p.format || 'openai'
+    const otherFormat = format === 'anthropic' ? 'openai' : 'anthropic'
+    const activeGroup = p.activeGroup || 'default'
+    const fallbackApiType = format === 'anthropic' ? 'chat' : (p.apiType || 'both')
     const groupApiKeys = p.groupApiKeys || { default: p.apiKey || '' }
-    const models = p.models || (p.model ? [{ name: p.model, apiType: p.apiType || 'both' }] : [])
+    const fallbackModels = p.model ? [{ name: p.model, apiType: fallbackApiType, format }] : []
+    const topModels = filterModelsForFormat(normalizeModelList(p.models || fallbackModels, fallbackApiType, format), format)
+    const sourceGroupModels = p.groupModels || { default: topModels }
+    const splitLegacyGroupModels = splitGroupModelsByFormat(sourceGroupModels, format, fallbackApiType)
+    const persistedFormatGroupModels = normalizeFormatGroupModels(p.formatGroupModels)
+    const groupModels = normalizeGroupModelsForFormat(sourceGroupModels, format, fallbackApiType)
+    const formatModels = normalizeFormatModels(p.formatModels)
+    const formatGroupModels = {
+      [format]: groupModels,
+      [otherFormat]: hasAnyModels(persistedFormatGroupModels[otherFormat])
+        ? persistedFormatGroupModels[otherFormat]!
+        : splitLegacyGroupModels[otherFormat],
+    }
+    const activeModels = groupModels[activeGroup] || topModels
+    const models = activeModels.length > 0 ? activeModels : topModels
     return {
       ...p,
-      format: p.format || 'openai',
+      format,
       groupApiKeys,
-      groupModels: p.groupModels || { default: models },
-      activeGroup: p.activeGroup || 'default',
+      models,
+      model: models.some(m => m.name === p.model) ? p.model : (models[0]?.name || ''),
+      groupModels,
+      formatModels,
+      formatGroupModels,
+      activeGroup,
     }
   })
 

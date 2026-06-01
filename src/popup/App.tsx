@@ -3,6 +3,8 @@ import type { Provider, TestResult, ChatMessage, ChatSession, ExportData, Site, 
 import { StatusBadge } from '../components/StatusBadge'
 import { SiteForm } from '../components/SiteForm'
 import { SiteCard } from '../components/SiteCard'
+import { filterModelNamesForFormat, filterModelsForFormat, normalizeModelList } from '../utils/modelFormat'
+import { exportProviders, validateExportData } from '../utils/export'
 
 function localDateStr(): string {
   const d = new Date()
@@ -13,8 +15,27 @@ function sendMessage<T>(type: string, payload?: unknown): Promise<T> {
   return chrome.runtime.sendMessage({ type, payload })
 }
 
-async function copyToClipboard(text: string) {
-  try { await navigator.clipboard.writeText(text) } catch {}
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.left = '-9999px'
+      textarea.style.top = '0'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+      const ok = document.execCommand('copy')
+      textarea.remove()
+      return ok
+    } catch {
+      return false
+    }
+  }
 }
 
 interface FormatModelDraft {
@@ -34,10 +55,31 @@ function createEmptyGroupModels(groupApiKeys: Record<string, string>, activeGrou
   return Object.fromEntries([...groups].map(group => [group, []]))
 }
 
+function normalizeGroupModelsForFormat(
+  groupModels: Record<string, ModelEntry[]> | undefined,
+  format: ProviderFormat,
+  fallbackApiType: ApiType,
+): Record<string, ModelEntry[]> {
+  return Object.fromEntries(
+    Object.entries(groupModels || { default: [] }).map(([group, models]) => [
+      group,
+      filterModelsForFormat(normalizeModelList(models, fallbackApiType, format), format),
+    ])
+  )
+}
+
+function normalizeModelsForFormat(
+  models: Array<ModelEntry | string> | undefined,
+  format: ProviderFormat,
+  fallbackApiType: ApiType,
+): ModelEntry[] {
+  return filterModelsForFormat(normalizeModelList(models, fallbackApiType, format), format)
+}
+
 export function App() {
   const [providers, setProviders] = useState<Provider[]>([])
   const [activeProvider, setActiveProvider] = useState<Provider | null>(null)
-  const [testing, setTesting] = useState<string | null>(null)
+  const [testingIds, setTestingIds] = useState<Set<string>>(() => new Set())
   const [testingAll, setTestingAll] = useState(false)
   const [showPanel, setShowPanel] = useState(false)
   const [showChat, setShowChat] = useState(false)
@@ -54,6 +96,7 @@ export function App() {
   const [formNewModel, setFormNewModel] = useState('')
   const [formNewModelApiType, setFormNewModelApiType] = useState<ApiType>('both')
   const [formModelFilter, setFormModelFilter] = useState<ApiType | 'all'>('all')
+  const [formModelSearch, setFormModelSearch] = useState('')
   const [editingModelName, setEditingModelName] = useState<string | null>(null)
   const [editingModelValue, setEditingModelValue] = useState('')
   const [formTestModel, setFormTestModel] = useState<string>('')
@@ -112,6 +155,8 @@ export function App() {
   const [webhookTestResult, setWebhookTestResult] = useState<{ success: boolean; message: string } | null>(null)
   const [providerImporting, setProviderImporting] = useState(false)
   const [providerImportError, setProviderImportError] = useState('')
+  const [clipboardImporting, setClipboardImporting] = useState(false)
+  const [sharedProviderId, setSharedProviderId] = useState<string | null>(null)
 
   const dropdownRef = useRef<HTMLDivElement>(null)
   const groupDropdownRef = useRef<HTMLDivElement>(null)
@@ -210,16 +255,26 @@ export function App() {
     const res = await sendMessage<{ success: boolean; data: Provider[] }>('GET_PROVIDERS')
     if (res.success) {
       const list = res.data.map(p => {
-        const allModels = Array.isArray(p.models) && p.models.length > 0
-          ? p.models.map(m => typeof m === 'string' ? { name: m, apiType: p.apiType || 'both' as ApiType } : m)
-          : (p.model ? [{ name: p.model, apiType: p.apiType || 'both' as ApiType }] : [])
-        const gm = p.groupModels || { default: allModels }
+        const format = p.format || 'openai'
+        const fallbackApiType = format === 'anthropic' ? 'chat' : (p.apiType || 'both')
+        const allModels = filterModelsForFormat(
+          normalizeModelList(
+            Array.isArray(p.models) && p.models.length > 0
+              ? p.models
+              : (p.model ? [{ name: p.model, apiType: fallbackApiType, format }] : []),
+            fallbackApiType,
+            format
+          ),
+          format
+        )
+        const gm = normalizeGroupModelsForFormat(p.groupModels || { default: allModels }, format, fallbackApiType)
         const ag = p.activeGroup || 'default'
         const activeModels = gm[ag] || allModels
         const currentModel = p.model || activeModels[0]?.name
         const modelExists = activeModels.some(m => m.name === currentModel)
         return {
           ...p,
+          format,
           models: activeModels,
           model: modelExists ? currentModel : (activeModels[0]?.name || p.model),
           groupModels: gm,
@@ -623,8 +678,46 @@ export function App() {
     }
   }
 
-  function handleImportClick() {
-    importInputRef.current?.click()
+  async function importProviderConfig(data: unknown): Promise<void> {
+    const res = await sendMessage<{ success: boolean; error?: string }>('IMPORT_PROVIDERS', data)
+    if (!res.success) {
+      throw new Error(res.error || 'Invalid config')
+    }
+    await loadProviders()
+  }
+
+  async function tryImportFromClipboard(): Promise<boolean> {
+    if (!navigator.clipboard?.readText) return false
+    try {
+      const text = (await navigator.clipboard.readText()).trim()
+      if (!text) return false
+
+      const data = JSON.parse(text)
+      const validation = validateExportData(data)
+      if (!validation.valid) return false
+
+      await importProviderConfig(data)
+      return true
+    } catch (error) {
+      if (error instanceof SyntaxError || error instanceof DOMException) {
+        return false
+      }
+      throw error
+    }
+  }
+
+  async function handleImportClick() {
+    setClipboardImporting(true)
+    try {
+      const imported = await tryImportFromClipboard()
+      if (!imported) {
+        importInputRef.current?.click()
+      }
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Invalid config')
+    } finally {
+      setClipboardImporting(false)
+    }
   }
 
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -633,11 +726,7 @@ export function App() {
     try {
       const text = await file.text()
       const data = JSON.parse(text)
-      const res = await sendMessage<{ success: boolean; error?: string }>('IMPORT_PROVIDERS', data)
-      if (!res.success) {
-        throw new Error(res.error || 'Invalid config file')
-      }
-      await loadProviders()
+      await importProviderConfig(data)
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Invalid config file')
     }
@@ -646,10 +735,23 @@ export function App() {
 
 
   async function handleTest(id: string) {
-    setTesting(id)
+    if (testingIds.has(id)) return
+    setTestingIds(prev => {
+      if (prev.has(id)) return prev
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
     const p = providers.find(p => p.id === id)
-    if (p) { await sendMessage('TEST_PROVIDER', p); await loadProviders() }
-    setTesting(null)
+    try {
+      if (p) { await sendMessage('TEST_PROVIDER', p); await loadProviders() }
+    } finally {
+      setTestingIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
   }
 
   async function handleTestAll() {
@@ -680,7 +782,7 @@ export function App() {
   function openAdd() {
     setEditingProvider(null)
     setFormName(''); setFormBaseUrl(''); setFormApiKey(''); setFormModels([])
-    setFormNewModel(''); setFormNewModelApiType('both'); setFormTestModel(''); setFormTestResult(null); setFormApiType('both'); setFormFormat('openai'); setFormGroupApiKeys({ default: '' }); setFormGroupModels({ default: [] }); setFormActiveGroup('default')
+    setFormNewModel(''); setFormNewModelApiType('both'); setFormModelFilter('all'); setFormModelSearch(''); setFormTestModel(''); setFormTestResult(null); setFormApiType('both'); setFormFormat('openai'); setFormGroupApiKeys({ default: '' }); setFormGroupModels({ default: [] }); setFormActiveGroup('default')
     setFormatModelDrafts(createEmptyFormatModelDrafts())
     setShowPanel(true)
   }
@@ -688,15 +790,27 @@ export function App() {
   function openEdit(p: Provider) {
     setEditingProvider(p)
     const gk = p.groupApiKeys || { default: p.apiKey || '' }
-    const fallbackModels = p.model ? [{ name: p.model, apiType: p.apiType || 'both' }] : []
-    const gm = p.groupModels || { default: p.models || fallbackModels }
-    const ag = p.activeGroup || 'default'
     const format = p.format || 'openai'
+    const fallbackApiType = format === 'anthropic' ? 'chat' : (p.apiType || 'both')
+    const ag = p.activeGroup || 'default'
+    const fallbackModels = p.model ? [{ name: p.model, apiType: fallbackApiType, format }] : []
+    const topModels = normalizeModelsForFormat(p.models || fallbackModels, format, fallbackApiType)
+    const gm = normalizeGroupModelsForFormat(p.groupModels || p.formatGroupModels?.[format] || { default: topModels }, format, fallbackApiType)
+    const currentModels = gm[ag] || topModels
+    const currentModel = currentModels.some(m => m.name === p.model) ? p.model : (currentModels[0]?.name || '')
     const drafts = createEmptyFormatModelDrafts()
-    drafts[format] = { groupModels: gm, testModel: gm[ag]?.[0]?.name || p.model || '' }
+    if (p.formatGroupModels?.openai) {
+      const openaiGroups = normalizeGroupModelsForFormat(p.formatGroupModels.openai, 'openai', 'both')
+      drafts.openai = { groupModels: openaiGroups, testModel: openaiGroups[ag]?.[0]?.name || '' }
+    }
+    if (p.formatGroupModels?.anthropic) {
+      const anthropicGroups = normalizeGroupModelsForFormat(p.formatGroupModels.anthropic, 'anthropic', 'chat')
+      drafts.anthropic = { groupModels: anthropicGroups, testModel: anthropicGroups[ag]?.[0]?.name || '' }
+    }
+    drafts[format] = { groupModels: gm, testModel: currentModel }
     setFormName(p.name); setFormBaseUrl(p.baseUrl); setFormApiKey(gk[ag] || p.apiKey || '')
-    setFormModels(gm[ag] || p.models || fallbackModels); setFormNewModel('')
-    setFormNewModelApiType('both'); setFormTestModel(gm[ag]?.[0]?.name || p.model); setFormTestResult(null); setFormApiType(p.apiType || 'both'); setFormFormat(format); setFormGroupApiKeys(gk); setFormGroupModels(gm); setFormatModelDrafts(drafts); setFormActiveGroup(ag)
+    setFormModels(currentModels); setFormNewModel(''); setFormModelFilter('all'); setFormModelSearch('')
+    setFormNewModelApiType('both'); setFormTestModel(currentModel); setFormTestResult(null); setFormApiType(p.apiType || 'both'); setFormFormat(format); setFormGroupApiKeys(gk); setFormGroupModels(gm); setFormatModelDrafts(drafts); setFormActiveGroup(ag)
     setShowPanel(true)
   }
 
@@ -714,7 +828,7 @@ export function App() {
     const targetDraft = nextDrafts[fmt]
     const targetGroupModels = {
       ...createEmptyGroupModels(formGroupApiKeys, formActiveGroup),
-      ...targetDraft.groupModels,
+      ...normalizeGroupModelsForFormat(targetDraft.groupModels, fmt, fmt === 'anthropic' ? 'chat' : 'both'),
     }
     const targetModels = targetGroupModels[formActiveGroup] || []
     const targetTestModel = targetModels.some(m => m.name === targetDraft.testModel)
@@ -727,6 +841,8 @@ export function App() {
     setFormModels(targetModels)
     setFormTestModel(targetTestModel)
     setFormNewModel('')
+    setFormModelFilter('all')
+    setFormModelSearch('')
     setFormTestResult(null)
     if (fmt === 'anthropic') {
       setFormApiType('chat')
@@ -737,7 +853,7 @@ export function App() {
     const m = formNewModel.trim()
     if (m && !formModels.some(x => x.name === m)) {
       const apiType = formFormat === 'anthropic' ? 'chat' : formNewModelApiType
-      const newModels = [...formModels, { name: m, apiType }]
+      const newModels = normalizeModelsForFormat([...formModels, { name: m, apiType, format: formFormat }], formFormat, apiType)
       setFormModels(newModels)
       setFormNewModel('')
       setFormNewModelApiType('both')
@@ -766,6 +882,10 @@ export function App() {
           let providerName = ''
           let providerUrl = ''
           let apiKey = ''
+          const isProviderUrlCandidate = (url: string) => {
+            const lower = url.toLowerCase()
+            return /^https?:\/\//i.test(url) && !lower.includes('linux.do') && !lower.includes('cdn')
+          }
 
           for (const cooked of cookedList) {
             let text = cooked.textContent || ''
@@ -811,7 +931,7 @@ export function App() {
                 try { href = decodeURIComponent(redirectMatch[1]) } catch {}
               }
 
-              if (href && !href.includes('linux.do') && /^https?:\/\//.test(href)) {
+              if (href && isProviderUrlCandidate(href)) {
                 providerUrl = href
                 providerName = linkText
                 break
@@ -820,19 +940,18 @@ export function App() {
 
             // Fallback: match raw URL from decoded text
             if (!providerUrl) {
-              const urlMatch = text.match(/https?:\/\/[^\s<>"']+/)
-              if (urlMatch && !urlMatch[0].includes('linux.do')) {
-                providerUrl = urlMatch[0]
+              const urlMatches = text.match(/https?:\/\/[^\s<>"']+/g) || []
+              const urlMatch = urlMatches.find(isProviderUrlCandidate)
+              if (urlMatch) {
+                providerUrl = urlMatch
               }
             }
 
             if (providerUrl) {
               // Match API keys from decoded text
               const keyPatterns = [
-                /\bsk-[A-Za-z0-9_-]{10,}\b/g,
-                /\btp-[A-Za-z0-9_-]{10,}\b/g,
-                /\bpk-[A-Za-z0-9_-]{10,}\b/g,
-                /\bak-[A-Za-z0-9_-]{10,}\b/g,
+                /\bsk-[A-Za-z0-9_-]{10,}\b/gi,
+                /\b[A-Za-z]{2}-[A-Za-z0-9_-]{10,}\b/g,
               ]
               for (const pattern of keyPatterns) {
                 const match = pattern.exec(text)
@@ -897,11 +1016,11 @@ export function App() {
     })
     if (res.success && res.data) {
       const defaultApiType: ApiType = formFormat === 'anthropic' ? 'chat' : 'both'
-      const existingNames = new Set(formModels.map(m => m.name))
-      const newModels = res.data
-        .filter(name => !existingNames.has(name))
-        .map(name => ({ name, apiType: defaultApiType }))
-      setFormModels(prev => [...prev, ...newModels])
+      const existingNames = new Set(formModels.map(m => m.name.toLowerCase()))
+      const newModels = filterModelNamesForFormat(res.data, formFormat)
+        .filter(name => !existingNames.has(name.toLowerCase()))
+        .map(name => ({ name, apiType: defaultApiType, format: formFormat }))
+      setFormModels(prev => normalizeModelsForFormat([...prev, ...newModels], formFormat, defaultApiType))
       if (!formTestModel && newModels.length > 0) {
         setFormTestModel(newModels[0].name)
       }
@@ -915,7 +1034,7 @@ export function App() {
     setFormModels(formModels.map(m => {
       if (m.name !== modelName) return m
       const next: ApiType = m.apiType === 'chat' ? 'responses' : m.apiType === 'responses' ? 'both' : 'chat'
-      return { ...m, apiType: next }
+      return { ...m, apiType: next, format: formFormat }
     }))
   }
 
@@ -926,6 +1045,16 @@ export function App() {
     if (formTestModel === m) {
       setFormTestModel(newModels[0]?.name || '')
     }
+  }
+
+  function clearFormModels() {
+    if (formModels.length === 0) return
+    setFormModels([])
+    setFormTestModel('')
+    setFormModelFilter('all')
+    setEditingModelName(null)
+    setEditingModelValue('')
+    setFormModelSearch('')
   }
 
   async function handleFormTest() {
@@ -948,10 +1077,19 @@ export function App() {
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
+    const currentGroupModels = { ...formGroupModels, [formActiveGroup]: formModels }
+    const nextDrafts: Record<ProviderFormat, FormatModelDraft> = {
+      ...formatModelDrafts,
+      [formFormat]: { groupModels: currentGroupModels, testModel: formTestModel },
+    }
+    const formatGroupModels = {
+      openai: normalizeGroupModelsForFormat(nextDrafts.openai.groupModels, 'openai', 'both'),
+      anthropic: normalizeGroupModelsForFormat(nextDrafts.anthropic.groupModels, 'anthropic', 'chat'),
+    }
     const data = {
       name: formName, baseUrl: formBaseUrl, apiKey: formApiKey,
       model: formModels[0]?.name || '', models: formModels, apiType: formApiType, format: formFormat,
-      groupApiKeys: { ...formGroupApiKeys, [formActiveGroup]: formApiKey }, groupModels: { ...formGroupModels, [formActiveGroup]: formModels }, activeGroup: formActiveGroup,
+      groupApiKeys: { ...formGroupApiKeys, [formActiveGroup]: formApiKey }, groupModels: currentGroupModels, formatGroupModels, activeGroup: formActiveGroup,
       isActive: editingProvider?.isActive || false,
     }
     if (editingProvider) {
@@ -1026,12 +1164,27 @@ export function App() {
       format: p.format,
       groupApiKeys: p.groupApiKeys || {},
       groupModels: p.groupModels || {},
+      formatModels: p.formatModels,
+      formatGroupModels: p.formatGroupModels,
       activeGroup: p.activeGroup || 'default',
       isActive: false,
     })
     if (res.success && res.data) {
       setProviders(prev => [...prev, res.data!])
     }
+  }
+
+  async function handleShareProvider(p: Provider) {
+    const data = exportProviders([p])
+    const ok = await copyToClipboard(JSON.stringify(data, null, 2))
+    if (!ok) {
+      alert('复制 provider 配置失败')
+      return
+    }
+    setSharedProviderId(p.id)
+    window.setTimeout(() => {
+      setSharedProviderId(current => current === p.id ? null : current)
+    }, 1500)
   }
 
   const chatProvider = providers.find(p => p.id === chatProviderId)
@@ -1189,7 +1342,7 @@ export function App() {
           <div className="text-[11px] font-semibold text-slate-800 truncate">{activeProvider.name}</div>
           <div className="text-[9px] text-slate-400 font-mono truncate">{activeProvider.baseUrl}</div>
           <div className="mt-0.5">
-            <StatusBadge status={activeProvider.testStatus} loading={testing === activeProvider.id || testingAll} />
+            <StatusBadge status={activeProvider.testStatus} loading={testingIds.has(activeProvider.id) || testingAll} />
           </div>
         </div>
       )}
@@ -1200,7 +1353,7 @@ export function App() {
             <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-slate-100 bg-slate-50/50">
               <button
                 onClick={handleTestAll}
-                disabled={testingAll || testing !== null}
+                disabled={testingAll || testingIds.size > 0}
                 className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold text-amber-600 bg-amber-50 hover:bg-amber-100 ring-1 ring-amber-200/60 transition-colors disabled:opacity-40"
               >
                 {testingAll ? (
@@ -1340,18 +1493,18 @@ export function App() {
                         )}
                       </div>
                       <div className="mt-0.5">
-                        <StatusBadge status={p.testStatus} loading={testing === p.id || testingAll} />
+                        <StatusBadge status={p.testStatus} loading={testingIds.has(p.id) || testingAll} />
                       </div>
                     </div>
                     {!selectMode && (
                       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shrink-0">
                         <button
                           onClick={e => { e.stopPropagation(); handleTest(p.id) }}
-                          disabled={testing !== null || !p.model}
+                          disabled={testingAll || testingIds.has(p.id) || !p.model}
                           title={!p.model ? '请先选择模型再测试' : '测试'}
                           className="w-5 h-5 flex items-center justify-center rounded hover:bg-blue-50 transition-colors disabled:opacity-20"
                         >
-                          {testing === p.id ? (
+                          {testingIds.has(p.id) ? (
                             <svg className="w-2.5 h-2.5 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
                           ) : (
                             <svg className="w-2.5 h-2.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
@@ -1363,6 +1516,17 @@ export function App() {
                           title="Duplicate provider"
                         >
                           <svg className="w-2.5 h-2.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" /></svg>
+                        </button>
+                        <button
+                          onClick={e => { e.stopPropagation(); handleShareProvider(p) }}
+                          className="w-5 h-5 flex items-center justify-center rounded hover:bg-emerald-50 transition-colors"
+                          title={sharedProviderId === p.id ? 'Provider config copied' : 'Share provider config'}
+                        >
+                          {sharedProviderId === p.id ? (
+                            <svg className="w-2.5 h-2.5 text-emerald-500" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                          ) : (
+                            <svg className="w-2.5 h-2.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z" /></svg>
+                          )}
                         </button>
                         <button
                           onClick={e => { e.stopPropagation(); openEdit(p) }}
@@ -1397,10 +1561,15 @@ export function App() {
           </div>
           <div className="flex items-center gap-1.5">
             <input ref={importInputRef} type="file" accept=".json" onChange={handleImportFile} className="hidden" />
-            <button onClick={handleImportClick}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-200/60 transition-colors">
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-              Import
+            <button onClick={handleImportClick} disabled={clipboardImporting}
+              title="Import copied provider config from clipboard, or choose a JSON file"
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-emerald-200/60 transition-colors disabled:opacity-40">
+              {clipboardImporting ? (
+                <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+              ) : (
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+              )}
+              {clipboardImporting ? 'Importing' : 'Import'}
             </button>
             <button onClick={handleExport} disabled={providers.length === 0}
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[10px] font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 ring-1 ring-blue-200/60 transition-colors disabled:opacity-30">
@@ -1680,6 +1849,8 @@ export function App() {
                         setFormApiKey('')
                         setFormModels([])
                         setFormTestModel('')
+                        setFormModelFilter('all')
+                        setFormModelSearch('')
                       }
                       setGroupNewName('')
                       setGroupEditing(false)
@@ -1714,6 +1885,8 @@ export function App() {
                                 const groupModels = formGroupModels[g] || []
                                 setFormModels(groupModels)
                                 setFormTestModel(groupModels[0]?.name || '')
+                                setFormModelFilter('all')
+                                setFormModelSearch('')
                                 setGroupDropdownOpen(false)
                               }}
                               onDoubleClick={() => {
@@ -1779,6 +1952,8 @@ export function App() {
                       setFormApiKey(nextKeys.default || '')
                       setFormModels(nextModels.default || [])
                       setFormTestModel(nextModels.default?.[0]?.name || '')
+                      setFormModelFilter('all')
+                      setFormModelSearch('')
                     }}
                       className="px-2 py-1 text-[10px] font-semibold text-red-500 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
                       title="Delete group">-</button>
@@ -1808,18 +1983,26 @@ export function App() {
               </div>
 
               <div>
-                <div className="flex items-center gap-1.5 mb-1">
+                <div className="flex items-center justify-between gap-2 mb-1">
                   <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Models</label>
-                  <button type="button" onClick={handleSyncModels} disabled={syncingModels || !formBaseUrl.trim()}
-                    className="flex items-center gap-0.5 px-1.5 py-0.5 text-[8px] font-semibold text-blue-500 bg-blue-50 hover:bg-blue-100 rounded transition-colors disabled:opacity-30"
-                    title="Sync models from API">
-                    {syncingModels ? (
-                      <svg className="w-2.5 h-2.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
-                    ) : (
-                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
-                    )}
-                    Sync
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button type="button" onClick={handleSyncModels} disabled={syncingModels || !formBaseUrl.trim()}
+                      className="flex items-center gap-0.5 px-1.5 py-0.5 text-[8px] font-semibold text-blue-500 bg-blue-50 hover:bg-blue-100 rounded transition-colors disabled:opacity-30"
+                      title="Sync models from API">
+                      {syncingModels ? (
+                        <svg className="w-2.5 h-2.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                      ) : (
+                        <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>
+                      )}
+                      Sync
+                    </button>
+                    <button type="button" onClick={clearFormModels} disabled={formModels.length === 0}
+                      className="flex items-center gap-0.5 px-1.5 py-0.5 text-[8px] font-semibold text-red-500 bg-red-50 hover:bg-red-100 rounded transition-colors disabled:opacity-30"
+                      title="Clear current model list">
+                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18M8 6V4h8v2m-9 4l1 10h8l1-10" /></svg>
+                      Clear
+                    </button>
+                  </div>
                 </div>
                 {syncModelsError && (
                   <div className="mb-1.5 text-[9px] text-red-500 bg-red-50 px-2 py-1 rounded">{syncModelsError}</div>
@@ -1840,17 +2023,37 @@ export function App() {
                       }`}>{f === 'all' ? 'All' : f}</button>
                   ))}
                 </div>
+                <div className="relative mb-1.5">
+                  <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-300 pointer-events-none" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  <input type="search" value={formModelSearch} onChange={e => setFormModelSearch(e.target.value)}
+                    className="w-full pl-7 pr-7 py-1.5 text-[11px] font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-slate-800 placeholder:text-slate-400"
+                    placeholder="Search models..." />
+                  {formModelSearch && (
+                    <button type="button" onClick={() => setFormModelSearch('')}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded hover:bg-slate-100 transition-colors"
+                      title="Clear search">
+                      <svg className="w-2.5 h-2.5 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                  )}
+                </div>
                 <div className="space-y-1">
                   {formModels.length === 0 && (
                     <div className="text-[10px] text-slate-400 py-2 text-center">No models added</div>
                   )}
                   {(() => {
-                    const filtered = formModels.filter(m => formModelFilter === 'all' || m.apiType === formModelFilter)
+                    const search = formModelSearch.trim().toLowerCase()
+                    const filtered = formModels.filter(m =>
+                      (formModelFilter === 'all' || m.apiType === formModelFilter)
+                      && (!search || m.name.toLowerCase().includes(search))
+                    )
                     const sorted = [...filtered].sort((a, b) => {
                       if (a.name === formTestModel) return -1
                       if (b.name === formTestModel) return 1
                       return 0
                     })
+                    if (formModels.length > 0 && sorted.length === 0) {
+                      return <div className="text-[10px] text-slate-400 py-2 text-center">No matching models</div>
+                    }
                     return sorted.map((m) => (
                     <div key={m.name} className="flex items-center gap-1.5">
                       {editingModelName === m.name ? (
@@ -1859,7 +2062,7 @@ export function App() {
                           onBlur={() => {
                             const v = editingModelValue.trim()
                             if (v && v !== m.name && !formModels.some(x => x.name === v)) {
-                              setFormModels(formModels.map(x => x.name === m.name ? { ...x, name: v } : x))
+                              setFormModels(normalizeModelsForFormat(formModels.map(x => x.name === m.name ? { ...x, name: v, format: formFormat } : x), formFormat, formFormat === 'anthropic' ? 'chat' : 'both'))
                               if (formTestModel === m.name) setFormTestModel(v)
                             }
                             setEditingModelName(null)
