@@ -12,9 +12,11 @@ echo ""
 if [[ "$OSTYPE" == "darwin"* ]]; then
     MANIFEST_FILE="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/codex_config_host.json"
     LAUNCHER_FILE="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/codex_config_host_launcher.sh"
+    HOST_INSTALL_DIR="$HOME/Library/Application Support/CodexSwitchNativeHost"
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
     MANIFEST_FILE="$HOME/.config/google-chrome/NativeMessagingHosts/codex_config_host.json"
     LAUNCHER_FILE="$HOME/.config/google-chrome/NativeMessagingHosts/codex_config_host_launcher.sh"
+    HOST_INSTALL_DIR="$HOME/.local/share/codexswitch-native-host"
 else
     echo "错误: 不支持的操作系统 $OSTYPE"
     exit 1
@@ -32,6 +34,13 @@ if [ -f "$LAUNCHER_FILE" ]; then
     echo "已删除 launcher 文件: $LAUNCHER_FILE"
 else
     echo "launcher 文件不存在: $LAUNCHER_FILE"
+fi
+
+if [ -d "$HOST_INSTALL_DIR" ]; then
+    rm -rf "$HOST_INSTALL_DIR"
+    echo "已删除 native host 安装目录: $HOST_INSTALL_DIR"
+else
+    echo "native host 安装目录不存在: $HOST_INSTALL_DIR"
 fi
 
 echo ""

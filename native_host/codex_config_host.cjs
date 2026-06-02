@@ -65,11 +65,14 @@ function readTopLevelField(lines, field) {
   const searchEnd = firstSectionIndex === -1 ? lines.length : firstSectionIndex;
 
   for (let i = 0; i < searchEnd; i += 1) {
-    const match = lines[i].match(new RegExp(`^\\s*${field}\\s*=\\s*"((?:\\\\.|[^"])*)"\\s*$`));
+    const match = lines[i].match(new RegExp(`^\\s*${field}\\s*=\\s*(?:"((?:\\\\.|[^"])*)"|'([^']*)')\\s*$`));
     if (match) {
-      return match[1]
-        .replace(/\\"/g, '"')
-        .replace(/\\\\/g, '\\');
+      if (match[1] !== undefined) {
+        return match[1]
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\');
+      }
+      return match[2];
     }
   }
 
