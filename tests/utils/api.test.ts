@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { testProviderConnection } from '../../src/utils/api'
+import { streamChat, testProviderConnection } from '../../src/utils/api'
+import type { ChatMessage } from '../../src/types'
 
 global.fetch = vi.fn()
 
@@ -9,6 +10,28 @@ function mockFetchResponse(ok: boolean, status: number, body: unknown) {
     status,
     text: async () => typeof body === 'string' ? body : JSON.stringify(body),
   })
+}
+
+function mockStreamFetchResponse(ok: boolean, status: number, body: string, statusText = 'OK') {
+  ;(fetch as any).mockResolvedValueOnce({
+    ok,
+    status,
+    statusText,
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body))
+        controller.close()
+      },
+    }),
+  })
+}
+
+async function collectStream(generator: AsyncGenerator<string, void, unknown>): Promise<string> {
+  const chunks: string[] = []
+  for await (const chunk of generator) {
+    chunks.push(chunk)
+  }
+  return chunks.join('')
 }
 
 describe('API Utility', () => {
@@ -81,5 +104,43 @@ describe('API Utility', () => {
     expect(result.success).toBe(false)
     expect(result.statusCode).toBeUndefined()
     expect(result.message).toBe('Error')
+  })
+
+  it('streams OpenAI chat through chat/completions by default', async () => {
+    mockStreamFetchResponse(true, 200, [
+      'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n'))
+
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Hi' }]
+    const content = await collectStream(streamChat('https://api.test.com', 'test-key', 'gpt-test', messages))
+    const requestBody = JSON.parse((fetch as any).mock.calls[0][1].body)
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api.test.com/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' })
+    )
+    expect(requestBody).toMatchObject({ model: 'gpt-test', messages, stream: true })
+    expect(content).toBe('Hello')
+  })
+
+  it('streams OpenAI chat through chat/completions when apiType is both', async () => {
+    mockStreamFetchResponse(true, 200, [
+      'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n'))
+
+    const messages: ChatMessage[] = [{ role: 'user', content: 'Hi' }]
+    await collectStream(streamChat('https://api.test.com/v1', 'test-key', 'gpt-test', messages, 'both'))
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api.test.com/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' })
+    )
   })
 })

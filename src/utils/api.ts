@@ -183,7 +183,7 @@ export async function* streamChat(
   apiKey: string,
   model: string,
   messages: ChatMessage[],
-  apiType: ApiType = 'both',
+  apiType: ApiType = 'chat',
   format: ProviderFormat = 'openai'
 ): AsyncGenerator<string, void, unknown> {
   const base = baseUrl.replace(/\/+$/, '')
@@ -207,26 +207,29 @@ export async function* streamChat(
     return
   }
 
-  const useResponses = apiType === 'responses' || apiType === 'both'
   const useChat = apiType === 'chat' || apiType === 'both'
+  const useResponses = apiType === 'responses' || apiType === 'both'
 
   let url: string
   let body: object
+  let streamFormat: 'chat' | 'responses'
 
-  if (useResponses) {
-    url = base.includes('/v1') ? `${base}/responses` : `${base}/v1/responses`
-    body = {
-      model,
-      input: messages.map(m => ({ role: m.role, content: m.content })),
-      stream: true,
-    }
-  } else {
+  if (useChat) {
     url = base.includes('/v1') ? `${base}/chat/completions` : `${base}/v1/chat/completions`
     body = {
       model,
       messages: messages.map(m => ({ role: m.role, content: m.content })),
       stream: true,
     }
+    streamFormat = 'chat'
+  } else {
+    url = base.includes('/v1') ? `${base}/responses` : `${base}/v1/responses`
+    body = {
+      model,
+      input: messages.map(m => ({ role: m.role, content: m.content })),
+      stream: true,
+    }
+    streamFormat = 'responses'
   }
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -239,28 +242,28 @@ export async function* streamChat(
   })
 
   if (!response.ok) {
-    if (useResponses && useChat) {
-      const chatUrl = base.includes('/v1') ? `${base}/chat/completions` : `${base}/v1/chat/completions`
-      const chatBody = {
+    if (apiType === 'both' && useResponses) {
+      const responsesUrl = base.includes('/v1') ? `${base}/responses` : `${base}/v1/responses`
+      const responsesBody = {
         model,
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        input: messages.map(m => ({ role: m.role, content: m.content })),
         stream: true,
       }
-      const chatResponse = await fetch(chatUrl, {
+      const responsesResponse = await fetch(responsesUrl, {
         method: 'POST',
         headers,
-        body: JSON.stringify(chatBody),
+        body: JSON.stringify(responsesBody),
       })
-      if (!chatResponse.ok) {
-        throw new Error(`HTTP ${chatResponse.status}: ${chatResponse.statusText}`)
+      if (!responsesResponse.ok) {
+        throw new Error(`HTTP ${responsesResponse.status}: ${responsesResponse.statusText}`)
       }
-      yield* parseStream(chatResponse, 'chat')
+      yield* parseStream(responsesResponse, 'responses')
       return
     }
     throw new Error(`HTTP ${response.status}: ${response.statusText}`)
   }
 
-  yield* parseStream(response, useResponses ? 'responses' : 'chat')
+  yield* parseStream(response, streamFormat)
 }
 
 async function* parseStream(response: Response, format: 'chat' | 'responses'): AsyncGenerator<string, void, unknown> {

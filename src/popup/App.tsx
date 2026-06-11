@@ -1211,8 +1211,10 @@ export function App() {
 
     try {
       const port = (chrome as any).runtime.connect({ name: 'chat-stream' })
-      const chatApiType = chatProvider.models?.find(m => m.name === chatModel)?.apiType || chatProvider.apiType || 'both'
-      port.postMessage({ baseUrl: chatProvider.baseUrl, apiKey: chatProvider.apiKey, model: chatModel, messages: newMessages, apiType: chatApiType, format: chatProvider.format || 'openai' })
+      const providerFormat = chatProvider.format || 'openai'
+      const selectedApiType = chatProvider.models?.find(m => m.name === chatModel)?.apiType || chatProvider.apiType || 'both'
+      const chatApiType = providerFormat === 'openai' && selectedApiType === 'both' ? 'chat' : selectedApiType
+      port.postMessage({ baseUrl: chatProvider.baseUrl, apiKey: chatProvider.apiKey, model: chatModel, messages: newMessages, apiType: chatApiType, format: providerFormat })
 
       const chunks: string[] = []
       await new Promise<void>((resolve, reject) => {
