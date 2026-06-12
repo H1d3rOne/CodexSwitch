@@ -95,7 +95,7 @@ export async function testProviderConnection(
   format: ProviderFormat = 'openai'
 ): Promise<TestResult> {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 30000)
+  const timeoutId = setTimeout(() => controller.abort(), 60000)
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (format === 'anthropic') {
@@ -169,7 +169,7 @@ export async function testProviderConnection(
 
     if (error instanceof Error) {
       if (error.name === 'AbortError') {
-        return { success: false, message: 'Timeout', error: 'Request timeout after 30 seconds' }
+        return { success: false, message: 'Timeout', error: 'Request timeout after 60 seconds' }
       }
       return { success: false, message: 'Error', error: `Connection failed: ${error.message}` }
     }
