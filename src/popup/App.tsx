@@ -608,6 +608,22 @@ export function App() {
       return
     }
 
+    if (site.siteType === 'bohe') {
+      const res = await sendMessage<{ success: boolean; data?: TestResult; error?: string }>('CHECKIN_SITE', { site, manual })
+      const data = res.data
+      const status = {
+        lastTestTime: Date.now(),
+        isSuccess: !!(res.success && data?.success),
+        statusCode: data?.statusCode,
+        errorMessage: data?.error || res.error,
+        responseBody: data?.responseBody,
+      }
+      setSites(prev => prev.map(s => s.id === site.id ? { ...s, checkinStatus: status, checkinDate: today } : s))
+      await sendMessage('UPDATE_SITE', { id: site.id, updates: { checkinStatus: status, checkinDate: today } })
+      setCheckingInSiteId(null)
+      return
+    }
+
     if (site.accessToken) {
       const tokenRes = await sendMessage<{ success: boolean; data?: TestResult; error?: string }>('CHECKIN_SITE', {
         site: { ...site, authType: 'accessToken' as const },

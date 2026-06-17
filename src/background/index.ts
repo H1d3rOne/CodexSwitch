@@ -106,6 +106,96 @@ async function performAutoCheckin(): Promise<MessageResponse> {
   }
 }
 
+
+function buildBoheCheckinResult(result: SiteContextFetchResult, fallbackMessage: string): TestResult {
+  if (!isSiteContextSuccess(result)) {
+    const message = result?.error || fallbackMessage
+    return { success: false, statusCode: 0, message, error: message, responseBody: result?.body }
+  }
+
+  const parsed: { success?: boolean; message?: string; data?: any } = result.data || {}
+  const message = parsed.message || (parsed.success === true ? '签到成功' : `${result.status}`)
+  const responseBody = result.body || JSON.stringify(result.data || {})
+
+  if (!parsed.success) {
+    const isVerificationBlocked = isVerificationBlockedPayload({
+      statusCode: result.status,
+      message,
+      data: parsed.data ?? result.data,
+      responseBody,
+    })
+    return {
+      success: false,
+      statusCode: result.status,
+      message: isVerificationBlocked ? '签到需要验证' : message || '签到失败',
+      error: isVerificationBlocked ? 'verification_blocked' : message || 'checkin_failed',
+      responseBody: responseBody.slice(0, 500),
+    }
+  }
+
+  return {
+    success: true,
+    statusCode: result.status,
+    message,
+    responseBody: responseBody.slice(0, 500),
+  }
+}
+
+async function fetchBoheWithStoredCookie(siteUrl: string, cookie: string): Promise<SiteContextFetchResult> {
+  const origin = new URL(siteUrl).origin
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000)
+    const response = await fetch(`${origin}/api/checkin/spin`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Accept': '*/*',
+        'Content-Type': 'application/json',
+        'Cookie': cookie,
+        'Origin': origin,
+        'Referer': `${origin}/`,
+      },
+    })
+    clearTimeout(timeoutId)
+    const text = await response.text()
+    let data: any = null
+    try { data = JSON.parse(text) } catch {}
+    return { ok: response.ok, status: response.status, data, body: text }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { error: `Fetch failed: ${message}` }
+  }
+}
+
+async function handleBoheCheckin(site: Site): Promise<TestResult> {
+  const siteUrl = site.url.replace(/\/+$/, '')
+  const origin = new URL(siteUrl).origin
+  const browserCookieResult = await fetchInSiteContext(siteUrl, '/api/checkin/spin', {
+    method: 'POST',
+    headers: {
+      'Accept': '*/*',
+      'Content-Type': 'application/json',
+    },
+    body: '',
+  })
+
+  const browserResult = buildBoheCheckinResult(browserCookieResult || { error: '薄荷签到请求失败' }, '薄荷签到请求失败')
+  if (browserResult.success || browserResult.error === 'verification_blocked' || !site.cookie?.trim()) {
+    if (browserResult.success) {
+      console.log('[bohe-checkin] Success with browser cookie:', origin, browserResult.responseBody?.slice(0, 200) || '')
+    }
+    return browserResult
+  }
+
+  const storedCookieResult = await fetchBoheWithStoredCookie(siteUrl, site.cookie.trim())
+  const fallbackResult = buildBoheCheckinResult(storedCookieResult, browserResult.message || '薄荷签到请求失败')
+  if (fallbackResult.success) {
+    console.log('[bohe-checkin] Success with stored cookie fallback:', origin, fallbackResult.responseBody?.slice(0, 200) || '')
+  }
+  return fallbackResult
+}
+
 async function handleAnyRouterCheckin(site: Site): Promise<TestResult> {
   try {
     const tab = await chrome.tabs.create({ url: site.url, active: false })
@@ -173,7 +263,8 @@ async function openVerificationTabOnce(site: Site, today: string) {
   if (verificationTabOpenKeys.has(key)) return
   verificationTabOpenKeys.add(key)
 
-  const checkinPageUrl = `${new URL(site.url.replace(/\/+$/, '')).origin}/console/personal`
+  const origin = new URL(site.url.replace(/\/+$/, '')).origin
+  const checkinPageUrl = site.siteType === 'bohe' ? origin : `${origin}/console/personal`
   await chrome.tabs.create({ url: checkinPageUrl, active: true })
 }
 
@@ -182,6 +273,13 @@ async function checkinSiteOnce(site: Site, today: string) {
 
   if (site.siteType === 'anyrouter') {
     const result = await handleAnyRouterCheckin(site)
+    await persistCheckinAttempt(site, today, result, isRetry)
+    return
+  }
+
+  if (site.siteType === 'bohe') {
+    const attemptSite = isRetry ? { ...site, checkinTimeRange: undefined } : site
+    const result = await handleBoheCheckin(attemptSite)
     await persistCheckinAttempt(site, today, result, isRetry)
     return
   }
@@ -1789,6 +1887,10 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
 
   try {
     const siteUrl = site.url.replace(/\/+$/, '')
+
+    if (site.siteType === 'bohe') {
+      return { success: true, data: await handleBoheCheckin(site) }
+    }
 
     let userId: string | undefined = site.userId
     let checkinHeaders: Record<string, string>

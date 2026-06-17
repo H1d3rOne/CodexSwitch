@@ -46,6 +46,7 @@ export interface CheckinTimeRange {
 export type SiteType =
   | 'one-api'
   | 'new-api'
+  | 'bohe'
   | 'anyrouter'
   | 'Veloera'
   | 'one-hub'
@@ -62,6 +63,7 @@ export type SiteType =
 
 export const SITE_TYPE_OPTIONS: { value: SiteType; label: string }[] = [
   { value: 'new-api', label: 'New API' },
+  { value: 'bohe', label: '薄荷' },
   { value: 'one-api', label: 'One API' },
   { value: 'Veloera', label: 'Veloera' },
   { value: 'one-hub', label: 'One Hub' },

@@ -168,6 +168,9 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
         return
       }
       setCookie(cookieRes.data)
+      if (siteType === 'bohe') {
+        return
+      }
       const userIdRes = await new Promise<{ success: boolean; data?: string; error?: string }>(resolve => {
         chrome.runtime.sendMessage({
           type: 'FETCH_SITE_USER_ID',
@@ -243,14 +246,14 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
       name: name.trim(),
       url: url.trim(),
       authType,
-      accessToken: accessToken.trim() || undefined,
-      cookie: cookie.trim() || undefined,
-      userId: userId.trim() || undefined,
+      accessToken: isFullApiSiteType ? (accessToken.trim() || undefined) : undefined,
+      cookie: supportsCookieInput ? (cookie.trim() || undefined) : undefined,
+      userId: isFullApiSiteType ? (userId.trim() || undefined) : undefined,
       siteType,
-      balanceUnit,
-      balanceCustomUnit: balanceUnit === 'custom' ? (balanceCustomUnit.trim() || undefined) : undefined,
+      balanceUnit: isFullApiSiteType ? balanceUnit : undefined,
+      balanceCustomUnit: isFullApiSiteType && balanceUnit === 'custom' ? (balanceCustomUnit.trim() || undefined) : undefined,
       autoCheckin,
-      autoRefreshCookie,
+      autoRefreshCookie: isFullApiSiteType ? autoRefreshCookie : undefined,
       checkinTimeRange: autoCheckin ? (() => {
         const { startHour, endHour, scheduledMinute: existingMinute } = checkinTimeRange
         const totalMinutes = (endHour - startHour) * 60
@@ -265,6 +268,8 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
   }
 
   const hours = Array.from({ length: 25 }, (_, i) => i)
+  const isFullApiSiteType = siteType !== 'anyrouter' && siteType !== 'bohe'
+  const supportsCookieInput = siteType !== 'anyrouter'
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col h-full">
@@ -331,8 +336,7 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
           placeholder="https://example.com" required />
       </div>
 
-      {siteType !== 'anyrouter' ? (
-      <>
+      {isFullApiSiteType && (
       <div>
         <label className="block text-[11px] font-medium text-slate-600 mb-1">
           Access Token
@@ -354,11 +358,13 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
           </button>
         </div>
       </div>
+      )}
 
+      {supportsCookieInput && (
       <div>
         <label className="block text-[11px] font-medium text-slate-600 mb-1">
           Cookie
-          <span className="text-[9px] font-normal text-slate-400 ml-1">(from browser DevTools &gt; Network &gt; Request Headers)</span>
+          <span className="text-[9px] font-normal text-slate-400 ml-1">{siteType === 'bohe' ? '(auth_token cookie)' : '(from browser DevTools &gt; Network &gt; Request Headers)'}</span>
         </label>
         <div className="flex gap-1.5 mb-1">
           <button type="button" onClick={handleSyncCookie} disabled={syncingCookie || !url.trim()}
@@ -380,10 +386,13 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
         <div className="relative">
           <textarea value={cookie} onChange={e => { setCookie(e.target.value); setCookieSyncError('') }} rows={2}
             className="w-full px-2.5 py-1.5 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 font-mono resize-none"
-            placeholder="Paste cookie string, or click Sync from Browser" />
+            placeholder={siteType === 'bohe' ? 'auth_token=... 或完整 Cookie 字符串' : 'Paste cookie string, or click Sync from Browser'} />
         </div>
       </div>
+      )}
 
+      {isFullApiSiteType && (
+      <>
       <div>
         <label className="block text-[11px] font-medium text-slate-600 mb-1">
           User ID
@@ -433,7 +442,7 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
         )}
       </div>
       </>
-      ) : null}
+      )}
 
       <div>
         <button type="button" onClick={() => setShowCheckinConfig(!showCheckinConfig)}
@@ -457,7 +466,7 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
               </button>
             </div>
 
-            {siteType !== 'anyrouter' ? (
+            {isFullApiSiteType ? (
             <div className="flex items-center justify-between">
               <span className="text-[10px] text-slate-500">Auto Refresh Cookie</span>
               <button
