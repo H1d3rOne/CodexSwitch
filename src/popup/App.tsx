@@ -134,7 +134,7 @@ export function App() {
   const [chatProviderDropdownOpen, setChatProviderDropdownOpen] = useState(false)
   const [chatModelDropdownOpen, setChatModelDropdownOpen] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const [checkinExpanded, setCheckinExpanded] = useState(true)
+  const [checkinExpanded, setCheckinExpanded] = useState(false)
   const [checkinTab, setCheckinTab] = useState<'enabled' | 'disabled'>('enabled')
   const pendingCheckinDone = useRef(false)
   const [dragId, setDragId] = useState<string | null>(null)

@@ -33,7 +33,7 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
   const [autoCheckin, setAutoCheckin] = useState(initialData?.autoCheckin || false)
   const [autoRefreshCookie, setAutoRefreshCookie] = useState(initialData?.autoRefreshCookie ?? true)
   const [checkinTimeRange, setCheckinTimeRange] = useState<CheckinTimeRange>(initialData?.checkinTimeRange || { startHour: 6, endHour: 7 })
-  const [showCheckinConfig, setShowCheckinConfig] = useState(!!initialData?.autoCheckin)
+  const [showCheckinConfig, setShowCheckinConfig] = useState(false)
   const [showSecret, setShowSecret] = useState(false)
   const [fetchingUserId, setFetchingUserId] = useState(false)
   const [userIdError, setUserIdError] = useState('')
@@ -79,6 +79,15 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
             null
           ).singleNodeValue
           if (el2?.textContent?.trim()) return el2.textContent.trim()
+
+          const el3 = document.evaluate(
+            '/html/body/div[1]/div[2]/header/div/a/span',
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null
+          ).singleNodeValue
+          if (el3?.textContent?.trim()) return el3.textContent.trim()
 
           return ''
         },
