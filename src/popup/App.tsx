@@ -593,17 +593,19 @@ export function App() {
 
     const today = localDateStr()
 
-    if (site.siteType === 'anyrouter') {
-      const res = await sendMessage<{ success: boolean; data?: TestResult; error?: string }>('CHECKIN_ANYROUTER', { site })
-      if (res.success && res.data?.success) {
-        const status = { lastTestTime: Date.now(), isSuccess: true, statusCode: res.data.statusCode, errorMessage: res.data.error, responseBody: res.data.responseBody }
-        setSites(prev => prev.map(s => s.id === site.id ? { ...s, checkinStatus: status, checkinDate: today } : s))
-        await sendMessage('UPDATE_SITE', { id: site.id, updates: { checkinStatus: status, checkinDate: today } })
-      } else {
-        const status = { lastTestTime: Date.now(), isSuccess: false, errorMessage: res.error || 'Checkin failed' }
-        setSites(prev => prev.map(s => s.id === site.id ? { ...s, checkinStatus: status, checkinDate: today } : s))
-        await sendMessage('UPDATE_SITE', { id: site.id, updates: { checkinStatus: status, checkinDate: today } })
+    if (site.siteType === 'anyrouter' || site.siteType === 'agentrouter') {
+      const messageType = site.siteType === 'agentrouter' ? 'CHECKIN_AGENTROUTER' : 'CHECKIN_ANYROUTER'
+      const res = await sendMessage<{ success: boolean; data?: TestResult; error?: string }>(messageType, { site })
+      const data = res.data
+      const status = {
+        lastTestTime: Date.now(),
+        isSuccess: !!(res.success && data?.success),
+        statusCode: data?.statusCode,
+        errorMessage: data?.error || res.error,
+        responseBody: data?.responseBody,
       }
+      setSites(prev => prev.map(s => s.id === site.id ? { ...s, checkinStatus: status, checkinDate: today } : s))
+      await sendMessage('UPDATE_SITE', { id: site.id, updates: { checkinStatus: status, checkinDate: today } })
       setCheckingInSiteId(null)
       return
     }

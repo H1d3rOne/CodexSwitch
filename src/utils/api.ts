@@ -16,7 +16,7 @@ interface ParsedBody {
   data?: any
 }
 
-const TEST_PROMPTS = ['Hi', 'Yes', 'No', 'Ok', 'Good', 'Bad', 'It', 'If', 'Then', 'Maybe', 'Yeah']
+const TEST_PROMPTS = ['这是', 'emmm', '没事', '看看', 'wow', 'uhah', 'peace', 'oh', 'Then', 'Maybe', 'Yeah']
 function randomPrompt(): string { return TEST_PROMPTS[Math.floor(Math.random() * TEST_PROMPTS.length)] }
 
 function buildTestEndpoints(baseUrl: string, model: string, apiType: ApiType, format: ProviderFormat): TestEndpoint[] {

@@ -44,43 +44,21 @@ export interface CheckinTimeRange {
 }
 
 export type SiteType =
-  | 'one-api'
   | 'new-api'
   | 'bohe'
   | 'anyrouter'
-  | 'Veloera'
-  | 'one-hub'
-  | 'done-hub'
-  | 'VoAPI'
-  | 'Super-API'
-  | 'Rix-Api'
-  | 'neo-Api'
-  | 'wong-gongyi'
-  | 'sub2api'
-  | 'octopus'
-  | 'axonhub'
-  | 'claude-code-hub'
+  | 'agentrouter'
 
 export const SITE_TYPE_OPTIONS: { value: SiteType; label: string }[] = [
   { value: 'new-api', label: 'New API' },
   { value: 'bohe', label: '薄荷' },
-  { value: 'one-api', label: 'One API' },
-  { value: 'Veloera', label: 'Veloera' },
-  { value: 'one-hub', label: 'One Hub' },
-  { value: 'done-hub', label: 'Done Hub' },
-  { value: 'VoAPI', label: 'VoAPI' },
-  { value: 'Super-API', label: 'Super API' },
-  { value: 'Rix-Api', label: 'Rix API' },
-  { value: 'neo-Api', label: 'Neo API' },
-  { value: 'wong-gongyi', label: 'Wong Gongyi' },
-  { value: 'sub2api', label: 'Sub2API' },
-  { value: 'octopus', label: 'Octopus' },
-  { value: 'axonhub', label: 'AxonHub' },
-  { value: 'claude-code-hub', label: 'Claude Code Hub' },
   { value: 'anyrouter', label: 'AnyRouter' },
+  { value: 'agentrouter', label: 'AgentRouter' },
 ]
 
 export type SiteAuthType = 'accessToken' | 'cookie'
+
+export type AgentRouterLoginType = 'linuxdo' | 'github'
 
 export type BalanceUnit = 'usd' | 'cny' | 'custom'
 
@@ -96,6 +74,7 @@ export interface Site {
   userId?: string
   authType?: SiteAuthType
   siteType?: SiteType
+  agentRouterLoginType?: AgentRouterLoginType
   balanceUnit?: BalanceUnit
   balanceCustomUnit?: string
   providerId?: string
@@ -207,6 +186,7 @@ export type MessageType =
   | 'FETCH_SITE_TOKEN_INFO'
   | 'FETCH_SITE_TOKEN_KEY'
   | 'CHECKIN_ANYROUTER'
+  | 'CHECKIN_AGENTROUTER'
   | 'SEND_WEBHOOK'
   | 'FETCH_SYSTEM_ACCESS_TOKEN'
 

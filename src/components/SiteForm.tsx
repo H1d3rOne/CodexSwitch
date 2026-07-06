@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import type { Site, SiteType, SiteAuthType, BalanceUnit, CheckinTimeRange } from '../types'
+import type { Site, SiteType, SiteAuthType, BalanceUnit, CheckinTimeRange, AgentRouterLoginType } from '../types'
 import { SITE_TYPE_OPTIONS } from '../types'
 
 interface SiteFormProps {
@@ -28,6 +28,7 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
   const [cookie, setCookie] = useState(initialData?.cookie || '')
   const [userId, setUserId] = useState(initialData?.userId || '')
   const [siteType, setSiteType] = useState<SiteType>(initialData?.siteType || 'new-api')
+  const [agentRouterLoginType, setAgentRouterLoginType] = useState<AgentRouterLoginType>(initialData?.agentRouterLoginType || 'linuxdo')
   const [balanceUnit, setBalanceUnit] = useState<BalanceUnit>(initialData?.balanceUnit || 'usd')
   const [balanceCustomUnit, setBalanceCustomUnit] = useState(initialData?.balanceCustomUnit || '')
   const [autoCheckin, setAutoCheckin] = useState(initialData?.autoCheckin || false)
@@ -259,6 +260,7 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
       cookie: supportsCookieInput ? (cookie.trim() || undefined) : undefined,
       userId: isFullApiSiteType ? (userId.trim() || undefined) : undefined,
       siteType,
+      agentRouterLoginType: siteType === 'agentrouter' ? agentRouterLoginType : undefined,
       balanceUnit: isFullApiSiteType ? balanceUnit : undefined,
       balanceCustomUnit: isFullApiSiteType && balanceUnit === 'custom' ? (balanceCustomUnit.trim() || undefined) : undefined,
       autoCheckin,
@@ -277,8 +279,15 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
   }
 
   const hours = Array.from({ length: 25 }, (_, i) => i)
-  const isFullApiSiteType = siteType !== 'anyrouter' && siteType !== 'bohe'
-  const supportsCookieInput = siteType !== 'anyrouter'
+  const isFullApiSiteType = siteType !== 'anyrouter' && siteType !== 'agentrouter' && siteType !== 'bohe'
+  const supportsCookieInput = siteType !== 'anyrouter' && siteType !== 'agentrouter'
+
+  function handleSiteTypeChange(nextType: SiteType) {
+    setSiteType(nextType)
+    if (nextType === 'agentrouter' && !url.trim()) {
+      setUrl('https://agentrouter.org/')
+    }
+  }
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col h-full">
@@ -330,13 +339,27 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
 
       <div>
         <label className="block text-[11px] font-medium text-slate-600 mb-1">Site Type</label>
-        <select value={siteType} onChange={e => setSiteType(e.target.value as SiteType)}
+        <select value={siteType} onChange={e => handleSiteTypeChange(e.target.value as SiteType)}
           className="w-full px-2.5 py-1.5 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400">
           {SITE_TYPE_OPTIONS.map(opt => (
             <option key={opt.value} value={opt.value}>{opt.label}</option>
           ))}
         </select>
       </div>
+
+      {siteType === 'agentrouter' && (
+      <div>
+        <label className="block text-[11px] font-medium text-slate-600 mb-1">Login Type</label>
+        <select value={agentRouterLoginType} onChange={e => setAgentRouterLoginType(e.target.value as AgentRouterLoginType)}
+          className="w-full px-2.5 py-1.5 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400">
+          <option value="linuxdo">LinuxDO 登录</option>
+          <option value="github">GitHub 登录</option>
+        </select>
+        <p className="mt-1 text-[9px] text-slate-400">
+          AgentRouter 会打开 agentrouter.org，通过页面 DOM 自动退出并按所选方式重新登录后签到。
+        </p>
+      </div>
+      )}
 
       <div>
         <label className="block text-[11px] font-medium text-slate-600 mb-1">Site URL</label>

@@ -1,4 +1,4 @@
-import type { Message, MessageResponse, Provider, TestResult, ChatMessage, ChatSession, ExportData, Site } from '../types'
+import type { Message, MessageResponse, Provider, TestResult, ChatMessage, ChatSession, ExportData, Site, AgentRouterLoginType } from '../types'
 
 function localDateStr(): string {
   const d = new Date()
@@ -219,6 +219,1152 @@ async function handleAnyRouterCheckinMessage(payload: { site: Site }): Promise<M
   }
 }
 
+const AGENT_ROUTER_URL = 'https://agentrouter.org/'
+
+type AgentRouterDomState = 'success' | 'blocked' | 'failed' | 'logged_out' | 'logged_in' | 'clicked'
+
+interface AgentRouterDomResult {
+  state: AgentRouterDomState
+  message: string
+  body?: string
+  error?: string
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function getTabSafe(tabId: number): Promise<chrome.tabs.Tab | null> {
+  try {
+    return await chrome.tabs.get(tabId)
+  } catch {
+    return null
+  }
+}
+
+async function closeTabSafe(tabId: number): Promise<void> {
+  try {
+    await chrome.tabs.remove(tabId)
+  } catch {}
+}
+
+async function waitForTabComplete(tabId: number, timeoutMs = 30000): Promise<void> {
+  const existing = await getTabSafe(tabId)
+  if (!existing) return
+  if (existing.status === 'complete') return
+
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener)
+      resolve()
+    }, timeoutMs)
+
+    const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updatedTabId !== tabId) return
+      if (info.status === 'complete') {
+        clearTimeout(timeout)
+        chrome.tabs.onUpdated.removeListener(listener)
+        resolve()
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(listener)
+  })
+}
+
+async function navigateAgentRouterTab(tabId: number, url: string, timeoutMs = 30000): Promise<void> {
+  await chrome.tabs.update(tabId, { url, active: true })
+  await waitForTabComplete(tabId, timeoutMs)
+  await sleep(1200)
+}
+
+async function reloadAgentRouterTab(tabId: number, timeoutMs = 30000): Promise<void> {
+  await chrome.tabs.reload(tabId, { bypassCache: true })
+  await sleep(300)
+  await waitForTabComplete(tabId, timeoutMs)
+  await sleep(1200)
+}
+
+async function openAgentRouterLoginPage(tabId: number, origin: string, timeoutMs = 45000): Promise<void> {
+  await navigateAgentRouterTab(tabId, `${origin}/login`, timeoutMs)
+  await reloadAgentRouterTab(tabId, timeoutMs)
+}
+
+function cookieRemovalUrl(cookie: chrome.cookies.Cookie): string {
+  const protocol = cookie.secure ? 'https:' : 'http:'
+  const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain
+  const path = cookie.path || '/'
+  return `${protocol}//${domain}${path}`
+}
+
+async function clearAgentRouterCookies(): Promise<void> {
+  try {
+    const cookies = await chrome.cookies.getAll({ domain: 'agentrouter.org' })
+    await Promise.all(cookies.map(cookie => chrome.cookies.remove({
+      url: cookieRemovalUrl(cookie),
+      name: cookie.name,
+      storeId: cookie.storeId,
+    }).catch(() => null)))
+  } catch (error) {
+    console.warn('[AgentRouter] Failed to clear cookies:', error)
+  }
+}
+
+async function clearAgentRouterSiteData(): Promise<void> {
+  await clearAgentRouterCookies()
+}
+
+async function runAgentRouterDomStep(
+  tabId: number,
+  step: 'detectSession' | 'logout' | 'login' | 'authorize' | 'detectAuth' | 'checkin' | 'detectBlocked',
+  loginType: AgentRouterLoginType = 'linuxdo'
+): Promise<AgentRouterDomResult> {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: async (innerStep: string, selectedLoginType: string) => {
+        type InnerResult = {
+          state: 'success' | 'blocked' | 'failed' | 'logged_out' | 'logged_in' | 'clicked'
+          message: string
+          body?: string
+          error?: string
+        }
+
+        const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+        const compact = (text: string) => text.replace(/\s+/g, ' ').trim()
+        const pageText = () => compact(document.body?.innerText || document.documentElement?.textContent || '')
+        const sampleBody = () => pageText().slice(0, 500)
+        const lowerPageText = () => pageText().toLowerCase()
+        const isElementVisible = (el: Element) => {
+          const htmlEl = el as HTMLElement
+          const style = window.getComputedStyle(htmlEl)
+          if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false
+          const rect = htmlEl.getBoundingClientRect()
+          return rect.width > 0 && rect.height > 0
+        }
+        const elementText = (el: Element) => {
+          const htmlEl = el as HTMLInputElement & HTMLElement
+          return compact([
+            htmlEl.innerText,
+            htmlEl.textContent,
+            htmlEl.getAttribute('aria-label'),
+            htmlEl.getAttribute('title'),
+            htmlEl.value,
+          ].filter(Boolean).join(' '))
+        }
+        const clickableElements = () => Array.from(document.querySelectorAll(
+          'button,a,[role="button"],[role="menuitem"],input[type="button"],input[type="submit"]'
+        )).filter(isElementVisible) as HTMLElement[]
+        const textIncludesAny = (text: string, patterns: string[]) => {
+          const lower = text.toLowerCase()
+          return patterns.some(pattern => lower.includes(pattern.toLowerCase()))
+        }
+        const clickElement = (el: HTMLElement) => {
+          try { el.scrollIntoView({ block: 'center', inline: 'center' }) } catch {}
+          el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }))
+          el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }))
+          el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }))
+          el.click()
+        }
+        const clickByText = (patterns: string[], excludes: string[] = []) => {
+          for (const el of clickableElements()) {
+            const text = elementText(el)
+            if (!text) continue
+            if (excludes.length && textIncludesAny(text, excludes)) continue
+            if (textIncludesAny(text, patterns)) {
+              const disabled = (el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true'
+              if (disabled) continue
+              clickElement(el)
+              return true
+            }
+          }
+          return false
+        }
+        const providerPatterns = (type: string) => (
+          type === 'github'
+            ? ['github', '使用 github', '使用 github 继续', 'continue with github', 'sign in with github', 'login with github']
+            : ['linuxdo', 'linux do', 'linux.do', '使用 linuxdo', '使用 linuxdo 继续', 'continue with linuxdo', 'sign in with linuxdo', 'login with linuxdo']
+        )
+        const providerStrongPatterns = (type: string) => (
+          type === 'github'
+            ? ['github.com/login/oauth/authorize', 'github_oauth', 'github oauth', '使用 github 继续']
+            : ['connect.linux.do/oauth2/authorize', 'linuxdo_oauth', 'linuxdo oauth', '使用 linuxdo 继续']
+        )
+        const providerExcludePatterns = (type: string) => (
+          type === 'github'
+            ? ['linuxdo', 'linux do', 'linux.do', 'wechat', '微信', 'telegram', 'oidc', '邮箱', '用户名', 'email', 'username']
+            : ['github', 'wechat', '微信', 'telegram', 'oidc', '邮箱', '用户名', 'email', 'username']
+        )
+        const elementSearchText = (el: Element) => {
+          const htmlEl = el as HTMLInputElement & HTMLAnchorElement & HTMLElement
+          let dataset = ''
+          try {
+            dataset = Object.keys(htmlEl.dataset || {}).map(key => htmlEl.dataset[key]).filter(Boolean).join(' ')
+          } catch {}
+
+          const attrText = [
+            elementText(el),
+            htmlEl.id,
+            htmlEl.className,
+            htmlEl.getAttribute('href'),
+            htmlEl.getAttribute('action'),
+            htmlEl.getAttribute('aria-label'),
+            htmlEl.getAttribute('title'),
+            htmlEl.getAttribute('name'),
+            htmlEl.getAttribute('value'),
+            htmlEl.getAttribute('data-provider'),
+            htmlEl.getAttribute('data-testid'),
+            dataset,
+            htmlEl.outerHTML?.slice(0, 1200),
+          ].filter(Boolean).join(' ')
+
+          return compact(attrText).toLowerCase()
+        }
+        const findProviderButton = (type: string): HTMLElement | null => {
+          const textPatterns = providerPatterns(type)
+          const strongPatterns = providerStrongPatterns(type)
+          const excludePatterns = providerExcludePatterns(type)
+          let best: { el: HTMLElement; score: number } | null = null
+
+          for (const el of clickableElements()) {
+            const disabled = (el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true'
+            if (disabled) continue
+
+            const visibleText = elementText(el)
+            const searchText = elementSearchText(el)
+            const matchesText = textIncludesAny(visibleText, textPatterns)
+            const matchesStrong = textIncludesAny(searchText, strongPatterns)
+            const matchesLoose = textIncludesAny(searchText, textPatterns)
+            if (!matchesText && !matchesStrong && !matchesLoose) continue
+
+            const matchesOtherProvider = excludePatterns.some(pattern => searchText.includes(pattern.toLowerCase()))
+            if (matchesOtherProvider && !matchesText && !matchesStrong) continue
+
+            const score = (matchesText ? 100 : 0) + (matchesStrong ? 40 : 0) + (matchesLoose ? 10 : 0) - (matchesOtherProvider ? 20 : 0)
+            if (!best || score > best.score) {
+              best = { el, score }
+            }
+          }
+
+          return best?.el || null
+        }
+        const clickProviderButton = async (type: string, timeoutMs = 5000) => {
+          const startedAt = Date.now()
+          while (Date.now() - startedAt < timeoutMs) {
+            const el = findProviderButton(type)
+            if (el) {
+              clickElement(el)
+              return true
+            }
+            await wait(250)
+          }
+          return false
+        }
+        const isAgentRouterLoginPath = () => {
+          const path = window.location.pathname.toLowerCase()
+          return path.includes('/login') || path.includes('/sign-in')
+        }
+        const hasProviderButton = (type: string) => {
+          return !!findProviderButton(type)
+        }
+        const fetchJson = async (url: string) => {
+          const response = await fetch(url, {
+            credentials: 'include',
+            headers: { accept: 'application/json' },
+          })
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`)
+          }
+          return response.json()
+        }
+        const getAgentRouterStatus = async () => {
+          try {
+            const cached = JSON.parse(window.localStorage.getItem('status') || '{}')
+            if (cached?.github_client_id || cached?.linuxdo_client_id) return cached
+          } catch {}
+
+          const json = await fetchJson('/api/status')
+          const status = json?.data || {}
+          try {
+            if (status && Object.keys(status).length > 0) {
+              window.localStorage.setItem('status', JSON.stringify(status))
+            }
+          } catch {}
+          return status
+        }
+        const getAgentRouterOAuthState = async () => {
+          let endpoint = '/api/oauth/state'
+          try {
+            const aff = window.localStorage.getItem('aff')
+            if (aff && aff.length > 0) endpoint += `?aff=${encodeURIComponent(aff)}`
+          } catch {}
+
+          const json = await fetchJson(endpoint)
+          if (json?.success && json?.data) return String(json.data)
+          throw new Error(json?.message || 'OAuth state unavailable')
+        }
+        const navigateProviderOAuthDirect = async (type: string) => {
+          try {
+            const status = await getAgentRouterStatus()
+            const state = await getAgentRouterOAuthState()
+            const clientId = type === 'github' ? status?.github_client_id : status?.linuxdo_client_id
+            if (!clientId) {
+              return { ok: false, error: `${type}_client_id_missing` }
+            }
+
+            const oauthUrl = type === 'github'
+              ? `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(clientId)}&state=${encodeURIComponent(state)}&scope=user%3Aemail`
+              : `https://connect.linux.do/oauth2/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&state=${encodeURIComponent(state)}`
+
+            window.location.href = oauthUrl
+            return { ok: true, url: oauthUrl }
+          } catch (error) {
+            return {
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            }
+          }
+        }
+        const hasLoggedInLocalState = () => {
+          try {
+            const user = window.localStorage.getItem('user')
+            if (user) {
+              const parsed = JSON.parse(user)
+              if (parsed?.id || parsed?.username || parsed?.display_name) return true
+            }
+          } catch {}
+          try {
+            if (window.localStorage.getItem('uid')) return true
+          } catch {}
+          return false
+        }
+        const clearLocalAuthState = () => {
+          try { window.localStorage.clear() } catch {}
+          try { window.sessionStorage.clear() } catch {}
+        }
+        const detectBlocked = (): InnerResult | null => {
+          const text = lowerPageText()
+          const html = (document.documentElement?.innerHTML || '').toLowerCase()
+          const blockedPatterns = [
+            'cf-turnstile',
+            'turnstile',
+            'cloudflare',
+            'cdn-cgi/challenge-platform',
+            '__cf_chl_',
+            'cf-chl-',
+            'cf-ray',
+            'just a moment',
+            'checking your browser',
+            'verify you are human',
+            'please verify you are human',
+            'human verification',
+            'managed challenge',
+            'hcaptcha',
+            'g-recaptcha',
+            'recaptcha',
+            'geetest',
+            'security check',
+            'please complete the security check',
+            '验证码',
+            '人机验证',
+            '安全验证',
+            '请先验证',
+            '请先完成验证',
+            '完成验证',
+          ]
+          if (blockedPatterns.some(pattern => text.includes(pattern) || html.includes(pattern))) {
+            return {
+              state: 'blocked',
+              message: 'AgentRouter 签到需要验证或人工处理',
+              error: 'verification_blocked',
+              body: sampleBody(),
+            }
+          }
+          return null
+        }
+        const detectLoginFailure = (): InnerResult | null => {
+          const text = lowerPageText()
+          const url = window.location.href.toLowerCase()
+          const failurePatterns = [
+            'login failed',
+            'sign in failed',
+            'signin failed',
+            'authorization failed',
+            'authentication failed',
+            'oauth failed',
+            'oauth error',
+            'callback error',
+            'could not sign in',
+            'failed to sign in',
+            'access_denied',
+            'invalid_grant',
+            'invalid_request',
+            'invalid_state',
+            'state mismatch',
+            '登录失败',
+            '登入失败',
+            '授权失败',
+            '认证失败',
+            '验证失败',
+            '登录出错',
+            '授权出错',
+            '未能登录',
+            '无法登录',
+          ]
+          if (failurePatterns.some(pattern => text.includes(pattern) || url.includes(pattern))) {
+            return {
+              state: 'failed',
+              message: 'AgentRouter 登录失败，准备重试登录',
+              error: 'login_failed',
+              body: sampleBody() || window.location.href,
+            }
+          }
+          return null
+        }
+        const signOutPatterns = ['sign out', 'logout', 'log out', '退出登录', '退出', '登出', '注销']
+        const hasSignOutControl = () => clickableElements().some(item => textIncludesAny(elementText(item), signOutPatterns))
+        const clickSignOutConfirmIfVisible = () => clickByText(signOutPatterns, ['cancel', '取消'])
+        const openUserMenu = async () => {
+          const directMenuButtons = Array.from(document.querySelectorAll(
+            'header button[aria-haspopup], nav button[aria-haspopup], header button[data-state], nav button[data-state], header [role="button"], nav [role="button"]'
+          )).filter(isElementVisible) as HTMLElement[]
+          const allHeaderButtons = Array.from(document.querySelectorAll('header button, nav button')).filter(isElementVisible) as HTMLElement[]
+          const candidates = [...directMenuButtons, ...allHeaderButtons]
+            .filter((el, idx, arr) => arr.indexOf(el) === idx)
+            .sort((a, b) => {
+              const ar = a.getBoundingClientRect()
+              const br = b.getBoundingClientRect()
+              return (br.right - ar.right) || (ar.top - br.top)
+            })
+
+          for (const el of candidates.slice(0, 8)) {
+            clickElement(el)
+            await wait(350)
+            if (hasSignOutControl()) {
+              return true
+            }
+          }
+          return false
+        }
+        const isAlreadyCheckedIn = () => {
+          const text = lowerPageText()
+          return text.includes('checked in') || text.includes('已签到') || text.includes('签到成功')
+        }
+        const clickCheckinButton = () => {
+          if (clickByText(['check in now', '立即签到'])) return true
+          for (const el of clickableElements()) {
+            const text = elementText(el)
+            if (!text.includes('签到')) continue
+            if (textIncludesAny(text, ['已签到', '每日签到', '签到奖励', '签到设置', '签到失败', '签到成功'])) continue
+            const disabled = (el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true'
+            if (disabled) continue
+            clickElement(el)
+            return true
+          }
+          return false
+        }
+
+        const blocked = innerStep === 'authorize' ? null : detectBlocked()
+        if (blocked) return blocked
+
+        if (innerStep === 'detectBlocked') {
+          return { state: 'success', message: 'No verification block detected', body: sampleBody() } satisfies InnerResult
+        }
+
+        if (innerStep === 'detectSession') {
+          if (isAgentRouterLoginPath() || hasProviderButton('github') || hasProviderButton('linuxdo')) {
+            return { state: 'logged_out', message: 'Not logged in; login controls are visible', body: sampleBody() } satisfies InnerResult
+          }
+
+          const text = lowerPageText()
+          const path = window.location.pathname.toLowerCase()
+          if (
+            hasLoggedInLocalState() ||
+            path.includes('/profile') ||
+            text.includes('daily check-in') ||
+            text.includes('每日签到') ||
+            hasSignOutControl()
+          ) {
+            return { state: 'logged_in', message: 'Logged in before AgentRouter check-in', body: sampleBody() } satisfies InnerResult
+          }
+
+          await openUserMenu()
+          await wait(300)
+          if (hasSignOutControl()) {
+            return { state: 'logged_in', message: 'Logged in; sign-out control found in user menu', body: sampleBody() } satisfies InnerResult
+          }
+
+          return { state: 'logged_out', message: 'Not logged in; skip sign-out before OAuth login', body: sampleBody() } satisfies InnerResult
+        }
+
+        if (innerStep === 'logout') {
+          if (isAgentRouterLoginPath() || hasProviderButton('github') || hasProviderButton('linuxdo')) {
+            try {
+              window.localStorage.removeItem('user')
+              window.localStorage.removeItem('uid')
+            } catch {}
+            return { state: 'logged_out', message: 'Already on login page', body: sampleBody() } satisfies InnerResult
+          }
+
+          let clickedSignOut = clickSignOutConfirmIfVisible()
+          if (!clickedSignOut) {
+            await openUserMenu()
+            clickedSignOut = clickSignOutConfirmIfVisible()
+          }
+
+          if (clickedSignOut) {
+            await wait(800)
+            clickSignOutConfirmIfVisible()
+            await wait(2200)
+          }
+
+          try {
+            window.localStorage.removeItem('user')
+            window.localStorage.removeItem('uid')
+          } catch {}
+
+          return {
+            state: 'logged_out',
+            message: clickedSignOut ? 'Signed out by DOM click' : 'Sign out control not found; local auth state cleared before OAuth reset',
+            body: sampleBody(),
+          } satisfies InnerResult
+        }
+
+        if (innerStep === 'login') {
+          if (hasLoggedInLocalState() && !isAgentRouterLoginPath()) {
+            clearLocalAuthState()
+            return {
+              state: 'logged_out',
+              message: 'Cleared stale local auth state before OAuth login',
+              body: sampleBody(),
+            } satisfies InnerResult
+          }
+
+          if (selectedLoginType === 'github') {
+            const directOAuth = await navigateProviderOAuthDirect(selectedLoginType)
+            if (directOAuth.ok) {
+              return { state: 'clicked', message: 'Opened GitHub OAuth directly', body: directOAuth.url } satisfies InnerResult
+            }
+          }
+
+          if (await clickProviderButton(selectedLoginType, 6000)) {
+            return { state: 'clicked', message: `Clicked ${selectedLoginType} login`, body: sampleBody() } satisfies InnerResult
+          }
+
+          const clickedOtherLoginOptions = clickByText([
+            '其他登录选项',
+            '其他登录方式',
+            '其他登录方法',
+            'other login options',
+            'other sign in options',
+            'other sign-in options',
+            'other login methods',
+          ])
+          if (clickedOtherLoginOptions || clickByText(['sign in', 'login', '登录', '登入'], ['邮箱', '用户名', 'email', 'username', 'password', '忘记密码', '继续'])) {
+            await wait(1000)
+            if (selectedLoginType === 'github') {
+              const directOAuth = await navigateProviderOAuthDirect(selectedLoginType)
+              if (directOAuth.ok) {
+                return { state: 'clicked', message: 'Opened GitHub OAuth directly after opening login options', body: directOAuth.url } satisfies InnerResult
+              }
+            }
+            if (await clickProviderButton(selectedLoginType, 6000)) {
+              return { state: 'clicked', message: `Clicked ${selectedLoginType} login after opening login page`, body: sampleBody() } satisfies InnerResult
+            }
+          }
+
+          return {
+            state: 'failed',
+            message: `未找到 ${selectedLoginType === 'github' ? 'GitHub' : 'LinuxDO'} 登录按钮`,
+            error: 'login_button_not_found',
+            body: sampleBody(),
+          } satisfies InnerResult
+        }
+
+        if (innerStep === 'authorize') {
+          const text = lowerPageText()
+          const loginFailure = detectLoginFailure()
+          if (loginFailure) return loginFailure
+
+          const directAuthorizeSelectors = [
+            'a.btn-pill-primary[href*="/oauth2/approve/"]',
+            'a[href*="/oauth2/approve/"]',
+            'form[action*="/oauth2/approve"] button[type="submit"]',
+            'form[action*="/oauth2/approve"] input[type="submit"]',
+            'button[name="authorize"]',
+            'input[name="authorize"]',
+            'button[value="authorize"]',
+            'input[value="Authorize"]',
+            'button#js-oauth-authorize-btn',
+            '.js-oauth-authorize-btn',
+          ]
+          for (const selector of directAuthorizeSelectors) {
+            const el = document.querySelector(selector) as HTMLElement | null
+            if (!el || !isElementVisible(el)) continue
+            const disabled = (el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true'
+            if (disabled) continue
+            const href = el instanceof HTMLAnchorElement ? el.href : ''
+            const beforeUrl = window.location.href
+            clickElement(el)
+            await wait(400)
+            const shouldUseHrefFallback = selectedLoginType !== 'linuxdo' && !href.toLowerCase().includes('/oauth2/approve/')
+            if (href && shouldUseHrefFallback && window.location.href === beforeUrl) {
+              window.location.href = href
+            }
+            return { state: 'clicked', message: 'Clicked OAuth approve button by selector', body: sampleBody() } satisfies InnerResult
+          }
+
+          const oauthBlocked = detectBlocked()
+          if (oauthBlocked) return oauthBlocked
+
+          const manualLoginPatterns = [
+            'sign in to github',
+            'username or email address',
+            'two-factor authentication',
+            'authentication code',
+            'verification code',
+            'passkey',
+            'sign in with a passkey',
+            'login to continue',
+            'log in to continue',
+            'password',
+            '登录 github',
+            '登录到 github',
+            '登录后继续',
+            '请输入密码',
+            '两步验证',
+            '双重验证',
+            '输入验证码',
+            '验证码',
+          ]
+          if (manualLoginPatterns.some(pattern => text.includes(pattern))) {
+            return {
+              state: 'blocked',
+              message: 'OAuth 页面需要手动登录或验证',
+              error: 'verification_blocked',
+              body: sampleBody(),
+            } satisfies InnerResult
+          }
+
+          const authorizePatterns = [
+            'authorize',
+            'allow',
+            'approve',
+            'grant access',
+            'continue',
+            '授权',
+            '允许',
+            '同意',
+            '批准',
+            '确认授权',
+            '继续',
+          ]
+          const denyPatterns = [
+            'cancel',
+            'deny',
+            'decline',
+            'reject',
+            '取消',
+            '拒绝',
+            '返回',
+          ]
+
+          if (clickByText(authorizePatterns, denyPatterns)) {
+            await wait(1200)
+            return { state: 'clicked', message: 'Clicked OAuth authorize button', body: sampleBody() } satisfies InnerResult
+          }
+
+          return {
+            state: 'failed',
+            message: '等待 OAuth 授权页面或授权按钮',
+            error: 'authorize_button_not_found',
+            body: sampleBody(),
+          } satisfies InnerResult
+        }
+
+        if (innerStep === 'detectAuth') {
+          const loginFailure = detectLoginFailure()
+          if (loginFailure) return loginFailure
+
+          if (hasLoggedInLocalState()) {
+            return { state: 'logged_in', message: 'Logged in', body: sampleBody() } satisfies InnerResult
+          }
+          const text = lowerPageText()
+          const path = window.location.pathname.toLowerCase()
+          if (!isAgentRouterLoginPath() && (path.includes('/profile') || text.includes('daily check-in') || text.includes('每日签到'))) {
+            return { state: 'logged_in', message: 'Logged in by page content', body: sampleBody() } satisfies InnerResult
+          }
+          return { state: 'failed', message: 'Waiting for login', error: 'not_logged_in', body: sampleBody() } satisfies InnerResult
+        }
+
+        if (innerStep === 'checkin') {
+          if (isAlreadyCheckedIn()) {
+            return { state: 'success', message: 'AgentRouter 今日已签到', body: sampleBody() } satisfies InnerResult
+          }
+
+          if (!clickCheckinButton()) {
+            return {
+              state: 'failed',
+              message: '未找到 AgentRouter 签到按钮',
+              error: 'checkin_button_not_found',
+              body: sampleBody(),
+            } satisfies InnerResult
+          }
+
+          for (let i = 0; i < 20; i += 1) {
+            await wait(600)
+            const currentBlocked = detectBlocked()
+            if (currentBlocked) return currentBlocked
+            const text = lowerPageText()
+            if (isAlreadyCheckedIn() || text.includes('check-in successful') || text.includes('签到成功')) {
+              return { state: 'success', message: 'AgentRouter 签到成功', body: sampleBody() } satisfies InnerResult
+            }
+            if (text.includes('check-in failed') || text.includes('签到失败')) {
+              return {
+                state: 'failed',
+                message: 'AgentRouter 签到失败',
+                error: 'checkin_failed',
+                body: sampleBody(),
+              } satisfies InnerResult
+            }
+          }
+
+          return {
+            state: 'failed',
+            message: 'AgentRouter 签到后未检测到成功状态',
+            error: 'checkin_result_unknown',
+            body: sampleBody(),
+          } satisfies InnerResult
+        }
+
+        return { state: 'failed', message: 'Unknown AgentRouter DOM step', error: 'unknown_step', body: sampleBody() } satisfies InnerResult
+      },
+      args: [step, loginType],
+    })
+    return results?.[0]?.result as AgentRouterDomResult || {
+      state: 'failed',
+      message: 'AgentRouter DOM step returned empty result',
+      error: 'empty_dom_result',
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { state: 'failed', message, error: message }
+  }
+}
+
+function isAgentRouterOAuthUrl(url: string, loginType?: AgentRouterLoginType): boolean {
+  const lower = url.toLowerCase()
+  if (!lower.startsWith('http://') && !lower.startsWith('https://')) return false
+
+  if (lower.includes('connect.linux.do/oauth2/authorize')) return true
+  if (lower.includes('connect.linux.do/oauth2/approve')) return true
+  if (lower.includes('connect.linux.do/login') || lower.includes('linux.do/login')) {
+    return !loginType || loginType === 'linuxdo'
+  }
+
+  if (
+    lower.includes('github.com/login/oauth/authorize') ||
+    lower.includes('github.com/oauth/authorize') ||
+    lower.includes('github.com/login') ||
+    lower.includes('github.com/session')
+  ) {
+    return !loginType || loginType === 'github'
+  }
+
+  return lower.includes('/oauth2/authorize') ||
+    lower.includes('/oauth2/approve') ||
+    lower.includes('/oauth/authorize') ||
+    lower.includes('/oauth/approve')
+}
+
+async function getAgentRouterLoginCandidateTabs(
+  mainTab: chrome.tabs.Tab,
+  origin: string,
+  loginType: AgentRouterLoginType,
+  trackedTabIds: Set<number>
+): Promise<chrome.tabs.Tab[]> {
+  const mainTabId = mainTab.id
+  if (!mainTabId) return []
+
+  const candidates: chrome.tabs.Tab[] = []
+  const seen = new Set<number>()
+  const addCandidate = (tab: chrome.tabs.Tab) => {
+    if (!tab.id || seen.has(tab.id)) return
+    seen.add(tab.id)
+    candidates.push(tab)
+  }
+
+  addCandidate(mainTab)
+
+  let tabs: chrome.tabs.Tab[] = []
+  try {
+    tabs = await chrome.tabs.query({})
+  } catch {
+    return candidates
+  }
+
+  for (const tab of tabs) {
+    if (!tab.id || tab.id === mainTabId) continue
+    const url = tab.url || ''
+    const openedByTrackedTab = tab.openerTabId === mainTabId || (tab.openerTabId != null && trackedTabIds.has(tab.openerTabId))
+    const sameWindow = mainTab.windowId == null || tab.windowId === mainTab.windowId
+    const isOAuthTab = isAgentRouterOAuthUrl(url, loginType)
+    const isTrackedTab = trackedTabIds.has(tab.id)
+
+    if (openedByTrackedTab || (sameWindow && isOAuthTab)) {
+      trackedTabIds.add(tab.id)
+    }
+
+    if (openedByTrackedTab || isTrackedTab || trackedTabIds.has(tab.id)) {
+      addCandidate(tab)
+      continue
+    }
+
+    if (sameWindow && isOAuthTab) {
+      addCandidate(tab)
+    } else if (sameWindow && trackedTabIds.has(tab.id) && url.startsWith(origin)) {
+      addCandidate(tab)
+    }
+  }
+
+  return candidates
+}
+
+async function waitForAgentRouterLogin(
+  tabId: number,
+  origin: string,
+  loginType: AgentRouterLoginType,
+  timeoutMs = 120000
+): Promise<AgentRouterDomResult> {
+  const deadline = Date.now() + timeoutMs
+  let lastUrl = ''
+  const trackedTabIds = new Set<number>()
+  const authorizedTabIds = new Set<number>()
+  const oauthFirstSeenAt = new Map<number, number>()
+  let authorizeClickedAt: number | null = null
+  let loginRetryCount = 0
+  let lastAgentRouterTabId = tabId
+  let lastAuthorizeResult: AgentRouterDomResult | null = null
+
+  const isLinuxDoOAuthUrl = (url: string): boolean => {
+    const lower = url.toLowerCase()
+    return lower.includes('connect.linux.do')
+  }
+
+  const hasInvalidRequestFailure = (url: string, result?: AgentRouterDomResult | null): boolean => {
+    const lowerUrl = url.toLowerCase()
+    const body = (result?.body || '').toLowerCase()
+    const message = (result?.message || '').toLowerCase()
+    const error = (result?.error || '').toLowerCase()
+    return lowerUrl.includes('invalid_request') ||
+      body.includes('invalid_request') ||
+      message.includes('invalid_request') ||
+      error.includes('invalid_request')
+  }
+
+  const getRetryAgentRouterTabId = async (): Promise<number | null> => {
+    if (await getTabSafe(lastAgentRouterTabId)) return lastAgentRouterTabId
+    if (await getTabSafe(tabId)) return tabId
+    return null
+  }
+
+  const retryAgentRouterLoginFromLoginPage = async (
+    failedTabId: number,
+    failedUrl: string,
+    failure?: AgentRouterDomResult | null
+  ): Promise<AgentRouterDomResult> => {
+    const retryTabId = await getRetryAgentRouterTabId()
+
+    if (failedTabId !== retryTabId && isLinuxDoOAuthUrl(failedUrl)) {
+      await closeTabSafe(failedTabId)
+      trackedTabIds.delete(failedTabId)
+      authorizedTabIds.delete(failedTabId)
+      oauthFirstSeenAt.delete(failedTabId)
+    }
+
+    if (loginRetryCount >= 1) {
+      return failure || {
+        state: 'failed',
+        message: 'AgentRouter 登录失败',
+        error: 'login_failed',
+        body: failedUrl,
+      }
+    }
+
+    if (!retryTabId) {
+      return {
+        state: 'failed',
+        message: 'AgentRouter 登录标签页已关闭',
+        error: 'tab_closed',
+        body: failedUrl,
+      }
+    }
+
+    if (failedTabId !== retryTabId && isLinuxDoOAuthUrl(failedUrl)) {
+      await closeTabSafe(failedTabId)
+      trackedTabIds.delete(failedTabId)
+      authorizedTabIds.delete(failedTabId)
+      oauthFirstSeenAt.delete(failedTabId)
+    }
+
+    return retryAgentRouterLogin(retryTabId)
+  }
+
+  const retryAgentRouterLogin = async (retryTabId: number): Promise<AgentRouterDomResult> => {
+    loginRetryCount += 1
+    authorizeClickedAt = null
+    authorizedTabIds.clear()
+    oauthFirstSeenAt.clear()
+    trackedTabIds.add(retryTabId)
+
+    await openAgentRouterLoginPage(retryTabId, origin, 45000)
+
+    const retryBlocked = await runAgentRouterDomStep(retryTabId, 'detectBlocked', loginType)
+    if (retryBlocked.state === 'blocked') return retryBlocked
+
+    let retryLoginResult = await runAgentRouterDomStep(retryTabId, 'login', loginType)
+    if (retryLoginResult.state === 'logged_out') {
+      await openAgentRouterLoginPage(retryTabId, origin, 45000)
+      retryLoginResult = await runAgentRouterDomStep(retryTabId, 'login', loginType)
+    }
+    return retryLoginResult
+  }
+
+  while (Date.now() < deadline) {
+    const tab = await getTabSafe(tabId)
+    if (!tab) {
+      return { state: 'failed', message: 'AgentRouter 登录标签页已关闭', error: 'tab_closed' }
+    }
+
+    const candidateTabs = await getAgentRouterLoginCandidateTabs(tab, origin, loginType, trackedTabIds)
+    const invalidRequestOAuthTab = candidateTabs.find(candidate => (
+      !!candidate.id &&
+      candidate.status === 'complete' &&
+      isLinuxDoOAuthUrl(candidate.url || '') &&
+      hasInvalidRequestFailure(candidate.url || '')
+    ))
+    if (invalidRequestOAuthTab?.id) {
+      const failedUrl = invalidRequestOAuthTab.url || ''
+      const retryLoginResult = await retryAgentRouterLoginFromLoginPage(invalidRequestOAuthTab.id, failedUrl, {
+        state: 'failed',
+        message: 'AgentRouter LinuxDO OAuth invalid_request，准备重试登录',
+        error: 'login_failed',
+        body: failedUrl,
+      })
+      if (retryLoginResult.state === 'blocked' || retryLoginResult.state === 'failed' || retryLoginResult.state === 'logged_in') {
+        return retryLoginResult
+      }
+
+      await sleep(1500)
+      continue
+    }
+
+    for (const candidateTab of candidateTabs) {
+      if (!candidateTab.id) continue
+      const candidateTabId = candidateTab.id
+      const candidateUrl = candidateTab.url || ''
+      lastUrl = candidateUrl || lastUrl
+      const isAgentRouter = candidateUrl.startsWith(origin)
+      const isOAuth = isAgentRouterOAuthUrl(candidateUrl, loginType)
+
+      if (isAgentRouter && candidateTab.status === 'complete') {
+        lastAgentRouterTabId = candidateTabId
+        oauthFirstSeenAt.delete(candidateTabId)
+        await sleep(1200)
+        const authState = await runAgentRouterDomStep(candidateTabId, 'detectAuth', loginType)
+        if (authState.state === 'blocked' || authState.state === 'logged_in') {
+          return authState
+        }
+        if (authState.error === 'login_failed' && loginRetryCount >= 1) {
+          return authState
+        }
+
+        const shouldRetryLogin = authState.state === 'failed' &&
+          authorizeClickedAt != null &&
+          loginRetryCount < 1 &&
+          (
+            authState.error === 'login_failed' ||
+            authorizedTabIds.has(candidateTabId) ||
+            Date.now() - authorizeClickedAt > 5000
+          )
+
+        if (shouldRetryLogin) {
+          const retryLoginResult = await retryAgentRouterLogin(candidateTabId)
+          if (retryLoginResult.state === 'blocked' || retryLoginResult.state === 'failed' || retryLoginResult.state === 'logged_in') {
+            return retryLoginResult
+          }
+
+          await sleep(1500)
+          continue
+        }
+      }
+
+      if (isOAuth) {
+        if (!oauthFirstSeenAt.has(candidateTabId)) {
+          oauthFirstSeenAt.set(candidateTabId, Date.now())
+        }
+        if (candidateTab.status === 'complete') {
+          if (isLinuxDoOAuthUrl(candidateUrl) && hasInvalidRequestFailure(candidateUrl)) {
+            const retryLoginResult = await retryAgentRouterLoginFromLoginPage(candidateTabId, candidateUrl, {
+              state: 'failed',
+              message: 'AgentRouter LinuxDO OAuth invalid_request，准备重试登录',
+              error: 'login_failed',
+              body: candidateUrl,
+            })
+            if (retryLoginResult.state === 'blocked' || retryLoginResult.state === 'failed' || retryLoginResult.state === 'logged_in') {
+              return retryLoginResult
+            }
+
+            await sleep(1500)
+            continue
+          }
+
+          if (authorizedTabIds.has(candidateTabId)) {
+            continue
+          }
+
+          await sleep(800)
+          const authorizeResult = await runAgentRouterDomStep(candidateTabId, 'authorize', loginType)
+          lastAuthorizeResult = authorizeResult
+
+          if (authorizeResult.state === 'blocked') {
+            return authorizeResult
+          }
+
+          if (isLinuxDoOAuthUrl(candidateUrl) && authorizeResult.error === 'login_failed' && hasInvalidRequestFailure(candidateUrl, authorizeResult)) {
+            const retryLoginResult = await retryAgentRouterLoginFromLoginPage(candidateTabId, candidateUrl, authorizeResult)
+            if (retryLoginResult.state === 'blocked' || retryLoginResult.state === 'failed' || retryLoginResult.state === 'logged_in') {
+              return retryLoginResult
+            }
+
+            await sleep(1500)
+            continue
+          }
+
+          if (authorizeResult.state === 'clicked') {
+            authorizeClickedAt = Date.now()
+            authorizedTabIds.add(candidateTabId)
+            trackedTabIds.add(candidateTabId)
+            await sleep(1800)
+          } else if (Date.now() - (oauthFirstSeenAt.get(candidateTabId) || Date.now()) > 15000) {
+            return {
+              state: 'blocked',
+              message: authorizeResult.message || 'OAuth 页面需要手动登录或授权',
+              error: 'verification_blocked',
+              body: authorizeResult.body || candidateUrl,
+            }
+          }
+        }
+      }
+    }
+
+    if (authorizeClickedAt != null && loginRetryCount < 1 && Date.now() - authorizeClickedAt > 12000) {
+      const retryTabId = (await getTabSafe(lastAgentRouterTabId)) ? lastAgentRouterTabId : tabId
+      const retryLoginResult = await retryAgentRouterLogin(retryTabId)
+      if (retryLoginResult.state === 'blocked' || retryLoginResult.state === 'failed' || retryLoginResult.state === 'logged_in') {
+        return retryLoginResult
+      }
+    }
+
+    await sleep(1500)
+  }
+
+  return {
+    state: 'blocked',
+    message: `等待 ${loginType === 'github' ? 'GitHub' : 'LinuxDO'} OAuth 登录超时，请在打开的标签页中手动完成登录/验证`,
+    error: 'verification_blocked',
+    body: lastAuthorizeResult?.body || lastUrl,
+  }
+}
+
+function agentRouterResultFromDom(result: AgentRouterDomResult): TestResult {
+  if (result.state === 'success') {
+    return {
+      success: true,
+      statusCode: 200,
+      message: result.message,
+      responseBody: result.body,
+    }
+  }
+
+  const isBlocked = result.state === 'blocked' || result.error === 'verification_blocked'
+  return {
+    success: false,
+    statusCode: 0,
+    message: isBlocked ? 'AgentRouter 签到需要验证或人工处理' : result.message,
+    error: isBlocked ? 'verification_blocked' : (result.error || result.message),
+    responseBody: result.body,
+  }
+}
+
+function agentRouterLoginSuccessResult(result: AgentRouterDomResult): TestResult {
+  return {
+    success: true,
+    statusCode: 200,
+    message: 'AgentRouter 登录成功，签到完成',
+    responseBody: result.body,
+  }
+}
+
+async function handleAgentRouterCheckin(site: Site): Promise<TestResult> {
+  const loginType = site.agentRouterLoginType || 'linuxdo'
+  const origin = new URL(AGENT_ROUTER_URL).origin
+  let tabId: number | null = null
+
+  try {
+    await clearAgentRouterSiteData()
+
+    const tab = await chrome.tabs.create({ url: AGENT_ROUTER_URL, active: true })
+    if (!tab.id) throw new Error('Failed to create AgentRouter tab')
+    tabId = tab.id
+
+    await waitForTabComplete(tabId, 45000)
+    await sleep(1500)
+
+    await openAgentRouterLoginPage(tabId, origin, 45000)
+
+    const initialBlocked = await runAgentRouterDomStep(tabId, 'detectBlocked', loginType)
+    if (initialBlocked.state === 'blocked') return agentRouterResultFromDom(initialBlocked)
+
+    let loginClickResult = await runAgentRouterDomStep(tabId, 'login', loginType)
+    if (loginClickResult.state === 'logged_out') {
+      await openAgentRouterLoginPage(tabId, origin, 45000)
+      loginClickResult = await runAgentRouterDomStep(tabId, 'login', loginType)
+    }
+    if (loginClickResult.state === 'blocked' || loginClickResult.state === 'failed') {
+      return agentRouterResultFromDom(loginClickResult)
+    }
+
+    if (loginClickResult.state === 'logged_in') {
+      return agentRouterResultFromDom({
+        state: 'failed',
+        message: 'AgentRouter 未进入 OAuth 登录流程，已阻止使用旧登录状态直接判定成功',
+        error: 'stale_login_state',
+        body: loginClickResult.body,
+      })
+    }
+
+    const loginResult = await waitForAgentRouterLogin(tabId, origin, loginType)
+    if (loginResult.state === 'blocked' || loginResult.state === 'failed') {
+      return agentRouterResultFromDom(loginResult)
+    }
+
+    await closeTabSafe(tabId)
+    tabId = null
+    return agentRouterLoginSuccessResult(loginResult)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'AgentRouter checkin failed'
+    if (tabId) await closeTabSafe(tabId)
+    return { success: false, statusCode: 0, message, error: message }
+  }
+}
+
+async function handleAgentRouterCheckinMessage(payload: { site: Site }): Promise<MessageResponse<import('../types').TestResult>> {
+  const result = await handleAgentRouterCheckin(payload.site)
+  return { success: true, data: result }
+}
+
 function responseToCheckinResult(response: MessageResponse<TestResult>, fallbackMessage: string): TestResult {
   if (response.success && response.data) return response.data
   const message = response.error || fallbackMessage
@@ -263,8 +1409,25 @@ async function openVerificationTabOnce(site: Site, today: string) {
   if (verificationTabOpenKeys.has(key)) return
   verificationTabOpenKeys.add(key)
 
-  const origin = new URL(site.url.replace(/\/+$/, '')).origin
-  const checkinPageUrl = site.siteType === 'bohe' ? origin : `${origin}/console/personal`
+  const origin = site.siteType === 'agentrouter'
+    ? new URL(AGENT_ROUTER_URL).origin
+    : new URL(site.url.replace(/\/+$/, '')).origin
+  const checkinPageUrl = site.siteType === 'bohe'
+    ? origin
+    : site.siteType === 'agentrouter'
+      ? AGENT_ROUTER_URL
+      : `${origin}/console/personal`
+  if (site.siteType === 'agentrouter') {
+    const existingTabs = await chrome.tabs.query({ url: `${origin}/*` })
+    const existingTab = existingTabs.find(tab => tab.id)
+    if (existingTab?.id) {
+      await chrome.tabs.update(existingTab.id, { active: true })
+      if (existingTab.windowId != null) {
+        await chrome.windows.update(existingTab.windowId, { focused: true }).catch(() => {})
+      }
+      return
+    }
+  }
   await chrome.tabs.create({ url: checkinPageUrl, active: true })
 }
 
@@ -273,6 +1436,12 @@ async function checkinSiteOnce(site: Site, today: string) {
 
   if (site.siteType === 'anyrouter') {
     const result = await handleAnyRouterCheckin(site)
+    await persistCheckinAttempt(site, today, result, isRetry)
+    return
+  }
+
+  if (site.siteType === 'agentrouter') {
+    const result = await handleAgentRouterCheckin(site)
     await persistCheckinAttempt(site, today, result, isRetry)
     return
   }
@@ -406,6 +1575,9 @@ async function handleMessage(message: Message): Promise<MessageResponse> {
 
       case 'CHECKIN_ANYROUTER':
         return handleAnyRouterCheckinMessage(message.payload as { site: Site })
+
+      case 'CHECKIN_AGENTROUTER':
+        return handleAgentRouterCheckinMessage(message.payload as { site: Site })
 
       case 'FETCH_SITE_MODELS':
         return handleFetchSiteModels(message.payload as { url: string; accessToken?: string; cookie?: string; authType?: import('../types').SiteAuthType })
