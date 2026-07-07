@@ -196,6 +196,201 @@ async function handleBoheCheckin(site: Site): Promise<TestResult> {
   return fallbackResult
 }
 
+interface BaibeiTokenPair {
+  accessToken?: string
+  refreshToken?: string
+  expiresIn?: number
+}
+
+interface BaibeiAttemptResult {
+  result: TestResult
+  authFailed: boolean
+}
+
+function normalizeBearerToken(token?: string): string {
+  return token?.trim().replace(/^Bearer\s+/i, '') || ''
+}
+
+function unwrapBaibeiResponse(parsed: any): any {
+  if (parsed && typeof parsed === 'object' && parsed.code === 0 && parsed.data && typeof parsed.data === 'object') {
+    return parsed.data
+  }
+  return parsed
+}
+
+function isBaibeiAuthFailure(status: number, parsed: any, text: string): boolean {
+  if (status === 401 || status === 403) return true
+  const message = String(parsed?.message || parsed?.msg || parsed?.error || parsed?.reason || text || '').toLowerCase()
+  return /unauthorized|forbidden|expired|invalid token|invalid jwt|jwt|token|auth|login|登录|认证|授权|过期|失效/.test(message)
+}
+
+async function requestBaibeiCheckin(origin: string, token: string): Promise<BaibeiAttemptResult> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 15000)
+  const response = await fetch(`${origin}/api/v1/check-in`, {
+    method: 'POST',
+    signal: controller.signal,
+    headers: {
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'zh',
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: '{}',
+  })
+  clearTimeout(timeoutId)
+
+  const text = await response.text()
+  let parsed: any = {}
+  let isJson = false
+  try {
+    parsed = JSON.parse(text)
+    isJson = true
+  } catch {}
+
+  const payload = unwrapBaibeiResponse(parsed)
+  const message = payload?.message || payload?.msg || parsed?.message || parsed?.msg || (isJson ? `${response.status}` : '百倍签到未返回 JSON')
+  const alreadyChecked = isAlreadyCheckedMessage(message)
+    || payload?.checked_in_today === true
+    || payload?.already_checked_in === true
+    || parsed?.data?.checked_in_today === true
+    || parsed?.data?.already_checked_in === true
+  const explicitSuccess = parsed?.success === true
+    || parsed?.code === 0
+    || payload?.success === true
+    || payload?.checked_in_today === true
+    || payload?.already_checked_in === true
+  const explicitFailure = parsed?.success === false
+    || payload?.success === false
+    || (typeof parsed?.code === 'number' && parsed.code !== 0)
+    || parsed?.error
+    || payload?.error
+  const isSuccess = response.ok && isJson && (alreadyChecked || explicitSuccess) && !explicitFailure
+
+  if (!isSuccess) {
+    const isVerificationBlocked = isVerificationBlockedPayload({
+      statusCode: response.status,
+      message,
+      data: payload ?? parsed,
+      responseBody: text,
+    })
+    return {
+      authFailed: isBaibeiAuthFailure(response.status, parsed, text),
+      result: {
+        success: false,
+        statusCode: response.status,
+        message: isVerificationBlocked ? '签到需要验证' : message || '百倍签到失败',
+        error: isVerificationBlocked ? 'verification_blocked' : (message || 'checkin_failed'),
+        responseBody: text.slice(0, 500),
+      },
+    }
+  }
+
+  return {
+    authFailed: false,
+    result: {
+      success: true,
+      statusCode: response.status,
+      message: alreadyChecked ? 'Already checked in today' : message,
+      responseBody: text.slice(0, 500),
+    },
+  }
+}
+
+async function refreshBaibeiAccessToken(origin: string, refreshToken: string): Promise<BaibeiTokenPair> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 15000)
+  const response = await fetch(`${origin}/api/v1/auth/refresh`, {
+    method: 'POST',
+    signal: controller.signal,
+    headers: {
+      'Accept': 'application/json, text/plain, */*',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  })
+  clearTimeout(timeoutId)
+
+  const text = await response.text()
+  let parsed: any = {}
+  try { parsed = JSON.parse(text) } catch {
+    throw new Error(`Refresh Token 刷新失败: ${response.status} ${text.slice(0, 120)}`)
+  }
+  const payload = unwrapBaibeiResponse(parsed)
+  const accessToken = payload?.access_token || parsed?.access_token
+  const nextRefreshToken = payload?.refresh_token || parsed?.refresh_token || refreshToken
+  const expiresIn = Number(payload?.expires_in ?? parsed?.expires_in)
+  const codeFailed = typeof parsed?.code === 'number' && parsed.code !== 0
+  if (!response.ok || codeFailed || !accessToken) {
+    const message = parsed?.message || payload?.message || parsed?.error || payload?.error || `HTTP ${response.status}`
+    throw new Error(`Refresh Token 刷新失败: ${message}`)
+  }
+  return {
+    accessToken: normalizeBearerToken(accessToken),
+    refreshToken: nextRefreshToken,
+    expiresIn: Number.isFinite(expiresIn) ? expiresIn : undefined,
+  }
+}
+
+async function persistBaibeiTokens(site: Site, tokens: BaibeiTokenPair): Promise<void> {
+  const updates: Partial<Site> = {}
+  if (tokens.accessToken) updates.accessToken = normalizeBearerToken(tokens.accessToken)
+  if (tokens.refreshToken) updates.refreshToken = tokens.refreshToken.trim()
+  if (site.id && Object.keys(updates).length > 0) {
+    await updateSite(site.id, updates).catch(() => {})
+  }
+}
+
+async function handleBaibeiCheckin(site: Site): Promise<TestResult> {
+  const origin = new URL(site.url).origin
+  let token = normalizeBearerToken(site.accessToken)
+  let refreshToken = (site.refreshToken || '').trim()
+
+  if (!token && refreshToken) {
+    try {
+      const refreshed = await refreshBaibeiAccessToken(origin, refreshToken)
+      token = normalizeBearerToken(refreshed.accessToken)
+      refreshToken = refreshed.refreshToken || refreshToken
+      await persistBaibeiTokens(site, refreshed)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Refresh Token 刷新失败'
+      return { success: false, statusCode: 0, message, error: message }
+    }
+  }
+
+  if (!token) {
+    return {
+      success: false,
+      statusCode: 0,
+      message: '百倍签到需要 Access Token 或 Refresh Token',
+      error: 'missing_access_token',
+    }
+  }
+
+  try {
+    const first = await requestBaibeiCheckin(origin, token)
+    if (first.result.success || !first.authFailed || !refreshToken) {
+      return first.result
+    }
+
+    const refreshed = await refreshBaibeiAccessToken(origin, refreshToken)
+    await persistBaibeiTokens(site, refreshed)
+    const retry = await requestBaibeiCheckin(origin, normalizeBearerToken(refreshed.accessToken))
+    return {
+      ...retry.result,
+      message: retry.result.success ? `${retry.result.message}（已刷新 Access Token）` : retry.result.message,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '百倍签到失败'
+    return {
+      success: false,
+      statusCode: 0,
+      message,
+      error: message,
+    }
+  }
+}
+
 async function handleAnyRouterCheckin(site: Site): Promise<TestResult> {
   try {
     const tab = await chrome.tabs.create({ url: site.url, active: false })
@@ -1449,6 +1644,12 @@ async function checkinSiteOnce(site: Site, today: string) {
   if (site.siteType === 'bohe') {
     const attemptSite = isRetry ? { ...site, checkinTimeRange: undefined } : site
     const result = await handleBoheCheckin(attemptSite)
+    await persistCheckinAttempt(site, today, result, isRetry)
+    return
+  }
+
+  if (site.siteType === 'baibei') {
+    const result = await handleBaibeiCheckin(site)
     await persistCheckinAttempt(site, today, result, isRetry)
     return
   }
@@ -3062,6 +3263,10 @@ async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Pro
 
     if (site.siteType === 'bohe') {
       return { success: true, data: await handleBoheCheckin(site) }
+    }
+
+    if (site.siteType === 'baibei') {
+      return { success: true, data: await handleBaibeiCheckin(site) }
     }
 
     let userId: string | undefined = site.userId

@@ -25,6 +25,7 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
   const [url, setUrl] = useState(initialData?.url || '')
   const [authType, setAuthType] = useState<SiteAuthType>(initialData?.authType || 'accessToken')
   const [accessToken, setAccessToken] = useState(initialData?.accessToken || '')
+  const [refreshToken, setRefreshToken] = useState(initialData?.refreshToken || '')
   const [cookie, setCookie] = useState(initialData?.cookie || '')
   const [userId, setUserId] = useState(initialData?.userId || '')
   const [siteType, setSiteType] = useState<SiteType>(initialData?.siteType || 'new-api')
@@ -255,8 +256,9 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
     const siteData: Omit<Site, 'id' | 'createdAt' | 'updatedAt'> = {
       name: name.trim(),
       url: url.trim(),
-      authType,
-      accessToken: isFullApiSiteType ? (accessToken.trim() || undefined) : undefined,
+      authType: siteType === 'baibei' ? 'accessToken' : authType,
+      accessToken: supportsAccessToken ? (accessToken.trim() || undefined) : undefined,
+      refreshToken: siteType === 'baibei' ? (refreshToken.trim() || undefined) : undefined,
       cookie: supportsCookieInput ? (cookie.trim() || undefined) : undefined,
       userId: isFullApiSiteType ? (userId.trim() || undefined) : undefined,
       siteType,
@@ -279,13 +281,17 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
   }
 
   const hours = Array.from({ length: 25 }, (_, i) => i)
-  const isFullApiSiteType = siteType !== 'anyrouter' && siteType !== 'agentrouter' && siteType !== 'bohe'
-  const supportsCookieInput = siteType !== 'anyrouter' && siteType !== 'agentrouter'
+  const isFullApiSiteType = siteType === 'new-api'
+  const supportsAccessToken = siteType === 'new-api' || siteType === 'baibei'
+  const supportsCookieInput = siteType === 'new-api' || siteType === 'bohe'
 
   function handleSiteTypeChange(nextType: SiteType) {
     setSiteType(nextType)
     if (nextType === 'agentrouter' && !url.trim()) {
       setUrl('https://agentrouter.org/')
+    }
+    if (nextType === 'baibei' && !url.trim()) {
+      setUrl('https://sub.100xlabs.space')
     }
   }
 
@@ -361,6 +367,12 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
       </div>
       )}
 
+      {siteType === 'baibei' && (
+      <div className="px-2.5 py-2 text-[10px] text-amber-600 bg-amber-50 rounded-lg border border-amber-100">
+        百倍站点基于 sub2api 二次开发；手动复制 Access Token / Refresh Token，签到使用 Access Token 请求 /api/v1/check-in，Access Token 失效时会用 Refresh Token 刷新后重试。
+      </div>
+      )}
+
       <div>
         <label className="block text-[11px] font-medium text-slate-600 mb-1">Site URL</label>
         <input type="url" value={url} onChange={e => setUrl(e.target.value)}
@@ -368,11 +380,13 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
           placeholder="https://example.com" required />
       </div>
 
-      {isFullApiSiteType && (
+      {supportsAccessToken && (
       <div>
         <label className="block text-[11px] font-medium text-slate-600 mb-1">
           Access Token
-          <span className="text-[9px] font-normal text-slate-400 ml-1">(system token, not sk- key)</span>
+          <span className="text-[9px] font-normal text-slate-400 ml-1">
+            {siteType === 'baibei' ? '(Bearer token from sub2api auth)' : '(system token, not sk- key)'}
+          </span>
         </label>
         <div className="relative">
           <input type={showSecret ? 'text' : 'password'} value={accessToken} onChange={e => setAccessToken(e.target.value)}
@@ -388,6 +402,20 @@ export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: Site
               )}
             </svg>
           </button>
+        </div>
+      </div>
+      )}
+
+      {siteType === 'baibei' && (
+      <div>
+        <label className="block text-[11px] font-medium text-slate-600 mb-1">
+          Refresh Token
+          <span className="text-[9px] font-normal text-slate-400 ml-1">(手动从浏览器 LocalStorage 复制)</span>
+        </label>
+        <div className="relative">
+          <input type={showSecret ? 'text' : 'password'} value={refreshToken} onChange={e => setRefreshToken(e.target.value)}
+            className="w-full px-2.5 py-1.5 pr-7 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-blue-400 font-mono"
+            placeholder="Paste refresh_token from browser LocalStorage" />
         </div>
       </div>
       )}

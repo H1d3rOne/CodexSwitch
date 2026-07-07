@@ -48,12 +48,14 @@ export type SiteType =
   | 'bohe'
   | 'anyrouter'
   | 'agentrouter'
+  | 'baibei'
 
 export const SITE_TYPE_OPTIONS: { value: SiteType; label: string }[] = [
   { value: 'new-api', label: 'New API' },
   { value: 'bohe', label: '薄荷' },
   { value: 'anyrouter', label: 'AnyRouter' },
   { value: 'agentrouter', label: 'AgentRouter' },
+  { value: 'baibei', label: '百倍' },
 ]
 
 export type SiteAuthType = 'accessToken' | 'cookie'
@@ -69,6 +71,7 @@ export interface Site {
   name: string
   url: string
   accessToken?: string
+  refreshToken?: string
   cookie?: string
   token?: string
   userId?: string

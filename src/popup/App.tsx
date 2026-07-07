@@ -610,7 +610,7 @@ export function App() {
       return
     }
 
-    if (site.siteType === 'bohe') {
+    if (site.siteType === 'bohe' || site.siteType === 'baibei') {
       const res = await sendMessage<{ success: boolean; data?: TestResult; error?: string }>('CHECKIN_SITE', { site, manual })
       const data = res.data
       const status = {
