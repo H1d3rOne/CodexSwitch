@@ -19,6 +19,28 @@ interface ParsedBody {
 const TEST_PROMPTS = ['这是', 'emmm', '没事', '看看', 'wow', 'uhah', 'peace', 'oh', 'Then', 'Maybe', 'Yeah']
 function randomPrompt(): string { return TEST_PROMPTS[Math.floor(Math.random() * TEST_PROMPTS.length)] }
 
+function toAnthropicTextContent(content: string): Array<{ type: 'text'; text: string }> {
+  return [{ type: 'text', text: content }]
+}
+
+function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: 'user' | 'assistant'; content: Array<{ type: 'text'; text: string }> }> {
+  return messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: toAnthropicTextContent(m.content),
+    }))
+}
+
+function getAnthropicSystem(messages: ChatMessage[]): string | undefined {
+  const system = messages
+    .filter(m => m.role === 'system')
+    .map(m => m.content)
+    .join('\n\n')
+    .trim()
+  return system || undefined
+}
+
 function buildTestEndpoints(baseUrl: string, model: string, apiType: ApiType, format: ProviderFormat): TestEndpoint[] {
   const base = baseUrl.replace(/\/+$/, '')
   const endpoints: TestEndpoint[] = []
@@ -28,7 +50,7 @@ function buildTestEndpoints(baseUrl: string, model: string, apiType: ApiType, fo
     const url = base.includes('/v1') ? `${base}/messages` : `${base}/v1/messages`
     endpoints.push({
       url,
-      body: { model, messages: [{ role: 'user', content: prompt }], max_tokens: 5 },
+      body: { model, messages: [{ role: 'user', content: toAnthropicTextContent(prompt) }], max_tokens: 128 },
       label: 'messages',
     })
     return endpoints
@@ -190,19 +212,26 @@ export async function* streamChat(
 
   if (format === 'anthropic') {
     const url = base.includes('/v1') ? `${base}/messages` : `${base}/v1/messages`
-    const body = {
+    const system = getAnthropicSystem(messages)
+    const body: Record<string, unknown> = {
       model,
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      messages: toAnthropicMessages(messages),
       max_tokens: 4096,
       stream: true,
     }
+    if (system) body.system = system
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'anthropic-version': '2023-06-01',
     }
     if (apiKey) headers['x-api-key'] = apiKey
     const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) })
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '')
+      const parsed = parseBody(bodyText)
+      const message = parsed.isJson ? extractErrorMessage(parsed.data) : undefined
+      throw new Error(`HTTP ${response.status}: ${message || response.statusText}`)
+    }
     yield* parseAnthropicStream(response)
     return
   }
@@ -319,9 +348,10 @@ async function* parseAnthropicStream(response: Response): AsyncGenerator<string,
 
     for (const line of lines) {
       const trimmed = line.trim()
-      if (!trimmed || !trimmed.startsWith('data: ')) continue
-      const data = trimmed.slice(6)
+      if (!trimmed || trimmed.startsWith(':') || trimmed.startsWith('event:')) continue
+      const data = trimmed.startsWith('data:') ? trimmed.slice(5).trimStart() : trimmed
       if (data === '[DONE]') return
+      if (!data.startsWith('{')) continue
       try {
         const json = JSON.parse(data)
         if (json.type === 'content_block_delta' && json.delta?.text) {
