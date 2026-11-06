@@ -81,6 +81,7 @@ export interface Site {
   balanceUnit?: BalanceUnit
   balanceCustomUnit?: string
   providerId?: string
+  enabled?: boolean
   autoCheckin?: boolean
   checkinTimeRange?: CheckinTimeRange
   balance?: string

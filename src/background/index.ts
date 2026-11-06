@@ -58,7 +58,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 async function refreshScheduledMinutes() {
   const sites = await getSites()
   for (const site of sites) {
-    if (!site.autoCheckin || !site.checkinTimeRange) continue
+    if (site.enabled === false || !site.autoCheckin || !site.checkinTimeRange) continue
     const { startHour, endHour } = site.checkinTimeRange
     const totalMinutes = (endHour - startHour) * 60
     const scheduledMinute = Math.floor(Math.random() * totalMinutes)
@@ -94,7 +94,7 @@ async function performAutoCheckin(): Promise<MessageResponse> {
         }
       }
       const updatedSites = await getSites()
-      const autoSites = updatedSites.filter(s => s.autoCheckin)
+      const autoSites = updatedSites.filter(s => s.enabled !== false && s.autoCheckin)
       const allCheckedIn = autoSites.every(s => isCheckinFinishedForToday(s, today))
       if (allCheckedIn) {
         await handleSendWebhook({ sites: updatedSites, today })
@@ -2960,7 +2960,7 @@ async function handleSendWebhook(payload: { sites: Site[]; today: string }): Pro
 
     const allSites = payload.sites
     const today = payload.today
-    const autoSites = allSites.filter(s => s.autoCheckin)
+    const autoSites = allSites.filter(s => s.enabled !== false && s.autoCheckin)
     const totalSites = allSites.length
     const enabledSites = autoSites.length
     const disabledSites = totalSites - enabledSites
@@ -3243,6 +3243,9 @@ async function turnstileAssistedCheckin(
 
 async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Promise<MessageResponse<TestResult>> {
   const { site, manual } = payload
+  if (site.enabled === false) {
+    return { success: false, error: 'Site is disabled' }
+  }
   if (!manual && site.checkinTimeRange) {
     const now = new Date()
     const hour = now.getHours()

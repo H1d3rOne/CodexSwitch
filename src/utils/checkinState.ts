@@ -74,7 +74,7 @@ export function isCheckinFinishedForToday(site: Site, today: string): boolean {
 }
 
 export function isSiteDueForAutoCheckin(site: Site, today: string, now: Date): boolean {
-  if (!site.autoCheckin) return false
+  if (site.enabled === false || !site.autoCheckin) return false
   if (isCheckinFinishedForToday(site, today)) return false
 
   const nowMs = now.getTime()
