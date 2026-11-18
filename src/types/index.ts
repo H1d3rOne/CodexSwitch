@@ -6,9 +6,11 @@ export interface TestStatus {
   responseBody?: string
 }
 
-export type ApiType = 'chat' | 'responses' | 'both'
+export type ApiType = 'chat' | 'responses' | 'messages' | 'both' | 'all'
 
-export type ProviderFormat = 'openai' | 'anthropic'
+export type ConcreteApiType = 'chat' | 'responses' | 'messages'
+
+export type ProviderFormat = 'openai' | 'anthropic' | 'deepseek'
 
 export interface ModelEntry {
   name: string
@@ -30,12 +32,21 @@ export interface Provider {
   formatGroupModels?: Partial<Record<ProviderFormat, Record<string, ModelEntry[]>>>
   apiType: ApiType
   format: ProviderFormat
+  formatConversionEnabled?: boolean
+  selectedApiType?: ConcreteApiType
+  /** Native selection, exclusive only within this provider's format. */
   isActive: boolean
+  /** Independently selected converted entries; excludes the native format. */
+  routerActiveFormats?: ProviderFormat[]
+  /** Effective routes last selected by the user, exclusive per target format. */
+  routerEffectiveFormats?: ProviderFormat[]
   balance?: string
   testStatus?: TestStatus
   createdAt: number
   updatedAt: number
 }
+
+export type RouterModelTestRequest = Provider & { targetFormat?: ProviderFormat }
 
 export interface CheckinTimeRange {
   startHour: number
@@ -120,6 +131,7 @@ export interface ExportData {
     formatGroupModels?: Partial<Record<ProviderFormat, Record<string, ModelEntry[]>>>
     apiType: ApiType
     format: ProviderFormat
+    formatConversionEnabled?: boolean
   }>
 }
 
@@ -129,6 +141,10 @@ export interface EndpointDetail {
   statusCode: number
   error?: string
   responseBody?: string
+  convertedFrom?: 'chat' | 'responses' | 'messages'
+  nativeStatusCode?: number
+  nativeError?: string
+  nativeResponseBody?: string
 }
 
 export interface TestResult {
@@ -162,7 +178,17 @@ export type MessageType =
   | 'UPDATE_PROVIDER'
   | 'DELETE_PROVIDER'
   | 'SET_ACTIVE_PROVIDER'
+  | 'GET_ROUTER_STATUS'
+  | 'ENABLE_ROUTER'
+  | 'UPDATE_ROUTER_SETTINGS'
+  | 'DISABLE_ROUTER'
+  | 'SET_CLIENT_ROUTING'
+  | 'GET_CLIENT_IDENTITY'
+  | 'SET_CLIENT_IDENTITY'
+  | 'GET_CLIENT_DISGUISE'
+  | 'SET_CLIENT_DISGUISE'
   | 'TEST_PROVIDER'
+  | 'TEST_MODEL_VIA_ROUTER'
   | 'UPDATE_TEST_STATUS'
   | 'EXPORT_PROVIDERS'
   | 'IMPORT_PROVIDERS'

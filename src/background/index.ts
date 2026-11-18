@@ -1,4 +1,4 @@
-import type { Message, MessageResponse, Provider, TestResult, ChatMessage, ChatSession, ExportData, Site, AgentRouterLoginType } from '../types'
+import type { Message, MessageResponse, Provider, RouterModelTestRequest, TestResult, ChatMessage, ChatSession, ExportData, Site, AgentRouterLoginType } from '../types'
 
 function localDateStr(): string {
   const d = new Date()
@@ -10,6 +10,8 @@ import {
   updateProvider,
   deleteProvider,
   setActiveProvider,
+  setRouterActiveProvider,
+  setRouterEffectiveProvider,
   reorderProviders,
   getSites,
   addSite,
@@ -18,6 +20,10 @@ import {
   reorderSites,
 } from '../utils/storage'
 import { testProviderConnection, streamChat } from '../utils/api'
+import { getClientIdentitySettings, normalizeClientIdentitySettings, saveClientIdentitySettings, CLIENT_IDENTITY_STORAGE_KEY, getClientDisguiseSettings, normalizeClientDisguiseSettings, saveClientDisguiseSettings, type ClientIdentitySettings, type ClientDisguiseSettings } from '../utils/clientIdentity'
+import { syncClientIdentityRules } from '../utils/clientIdentityRules'
+import { defaultApiTypeForFormat } from '../utils/modelFormat'
+import { selectRouterProvider } from '../utils/routerProvider'
 import { exportProviders, validateExportData, importProviders } from '../utils/export'
 import { buildCheckinAttemptUpdate, isCheckinFinishedForToday, isSiteDueForAutoCheckin, isVerificationBlockedPayload } from '../utils/checkinState'
 import {
@@ -27,9 +33,79 @@ import {
   saveChatSession,
   deleteChatSession,
 } from '../utils/chat'
-import { updateCodexSystemForProvider, updateClaudeSettingsForProvider } from '../utils/systemConfig'
+import {
+  disableLocalRouter,
+  setClientRouting,
+  enableLocalRouter,
+  getRouterStatus,
+  testModelViaRouter,
+  updateCodexSystemForProvider,
+  updateClaudeSettingsForProvider,
+  updateDeepSeekHarnessConfig,
+  updateLocalRouterProvider,
+  updateLocalRouterSettings,
+  updateRouterClientIdentity,
+  updateRouterClientDisguise,
+} from '../utils/systemConfig'
 
 chrome.sidePanel.setOptions({ path: 'sidepanel.html' })
+
+/**
+ * Reads the saved client fingerprint and rebuilds browser header rules for
+ * configured provider hosts. Native Router application is handled on saves.
+ */
+let identityRefreshQueue: Promise<unknown> = Promise.resolve()
+
+function refreshClientIdentity(): Promise<ClientIdentitySettings> {
+  // Read the saved snapshot inside the queue too: an earlier startup/provider
+  // refresh must not finish after a save and reinstall the old fingerprint.
+  const operation = identityRefreshQueue.then(async () => {
+    const identity = await getClientIdentitySettings()
+    const providers = await getProviders()
+    const result = await syncClientIdentityRules(providers, identity)
+    if (!result.ok) throw new Error(`配置已保存，但浏览器请求头规则未应用：${result.error || 'Unknown error'}`)
+    return identity
+  })
+  identityRefreshQueue = operation.catch(() => undefined)
+  return operation
+}
+
+void refreshClientIdentity().catch(error => console.warn('Client identity init failed', error))
+chrome.storage.onChanged?.addListener((changes, area) => {
+  if (area !== 'local' || !changes[CLIENT_IDENTITY_STORAGE_KEY]) return
+  void refreshClientIdentity().catch(error => console.warn('Client identity refresh failed', error))
+})
+
+async function handleGetClientIdentity(): Promise<MessageResponse<ClientIdentitySettings>> {
+  return { success: true, data: await refreshClientIdentity() }
+}
+
+async function handleSetClientIdentity(raw: unknown): Promise<MessageResponse<ClientIdentitySettings>> {
+  const identity = await saveClientIdentitySettings(normalizeClientIdentitySettings(raw))
+  // Apply both paths even when one fails, but never claim an unapplied save
+  // succeeded. The saved draft remains available for the next retry.
+  const [rules, router] = await Promise.allSettled([
+    refreshClientIdentity(),
+    updateRouterClientIdentity(identity),
+  ])
+  if (rules.status === 'rejected') throw rules.reason
+  if (router.status === 'rejected') throw router.reason
+  if (!router.value.success) return { success: false, error: `配置已保存，但 Router 未应用：${router.value.error || 'Unknown error'}`, data: identity }
+  return { success: true, data: identity }
+}
+
+async function handleGetClientDisguise(): Promise<MessageResponse<ClientDisguiseSettings>> {
+  return { success: true, data: await getClientDisguiseSettings() }
+}
+
+async function handleSetClientDisguise(raw: unknown): Promise<MessageResponse<ClientDisguiseSettings>> {
+  const disguise = await saveClientDisguiseSettings(normalizeClientDisguiseSettings(raw))
+  // Disguise is Router-only. If the Router is not enabled the native host still
+  // returns success (it simply has no state to write), so a save is never blocked.
+  const router = await updateRouterClientDisguise(disguise)
+  if (!router.success) return { success: false, error: `配置已保存，但 Router 未应用：${router.error || 'Unknown error'}`, data: disguise }
+  return { success: true, data: disguise }
+}
 
 chrome.action.onClicked.addListener((tab) => {
   if (tab.id) chrome.sidePanel.open({ tabId: tab.id })
@@ -1683,9 +1759,27 @@ async function checkinSiteOnce(site: Site, today: string) {
   await persistCheckinAttempt(site, today, lastResult, isRetry)
 }
 
+// Provider/client mutations share persisted documents. Serialize their complete
+// read -> native write -> storage commit flow across popup/side-panel windows.
+const providerStateMessages = new Set<Message['type']>([
+  'GET_PROVIDERS', 'ADD_PROVIDER', 'UPDATE_PROVIDER', 'DELETE_PROVIDER',
+  'REORDER_PROVIDERS', 'SET_ACTIVE_PROVIDER', 'UPDATE_TEST_STATUS',
+  'EXPORT_PROVIDERS', 'IMPORT_PROVIDERS', 'GET_ROUTER_STATUS', 'ENABLE_ROUTER',
+  'UPDATE_ROUTER_SETTINGS', 'DISABLE_ROUTER', 'SET_CLIENT_ROUTING', 'SET_CLIENT_IDENTITY',
+  'SET_CLIENT_DISGUISE',
+])
+let providerStateQueue: Promise<void> = Promise.resolve()
+
+function dispatchMessage(message: Message): Promise<MessageResponse> {
+  if (!providerStateMessages.has(message.type)) return handleMessage(message)
+  const result = providerStateQueue.then(() => handleMessage(message))
+  providerStateQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
 chrome.runtime.onMessage.addListener(
   (message: Message, _sender, sendResponse) => {
-    handleMessage(message).then(sendResponse)
+    dispatchMessage(message).then(sendResponse, error => sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) }))
     return true
   }
 )
@@ -1694,7 +1788,7 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'chat-stream') {
     port.onMessage.addListener(async (msg: { baseUrl: string; apiKey: string; model: string; messages: ChatMessage[]; apiType?: import('../types').ApiType; format?: import('../types').ProviderFormat }) => {
       try {
-        for await (const chunk of streamChat(msg.baseUrl, msg.apiKey, msg.model, msg.messages, msg.apiType || 'both', msg.format || 'openai')) {
+        for await (const chunk of streamChat(msg.baseUrl, msg.apiKey, msg.model, msg.messages, msg.apiType || defaultApiTypeForFormat(msg.format || 'openai'), msg.format || 'openai')) {
           port.postMessage({ type: 'chunk', data: chunk })
         }
         port.postMessage({ type: 'done' })
@@ -1727,10 +1821,40 @@ async function handleMessage(message: Message): Promise<MessageResponse> {
         return handleReorderSites(message.payload as string[])
 
       case 'SET_ACTIVE_PROVIDER':
-        return handleSetActiveProvider(message.payload as { id: string; sync?: boolean })
+        return handleSetActiveProvider(message.payload as { id: string; sync?: boolean; targetFormat?: Provider['format'] })
+
+      case 'GET_ROUTER_STATUS':
+        return handleGetRouterStatus()
+
+      case 'ENABLE_ROUTER':
+        return handleEnableRouter(message.payload as { port: number; proxyUrl?: string })
+
+      case 'UPDATE_ROUTER_SETTINGS':
+        return handleUpdateRouterSettings(message.payload as { port: number; proxyUrl?: string })
+
+      case 'DISABLE_ROUTER':
+        return handleDisableRouter()
+
+      case 'SET_CLIENT_ROUTING':
+        return handleSetClientRouting(message.payload as { format: Provider['format']; enabled: boolean })
+
+      case 'GET_CLIENT_IDENTITY':
+        return handleGetClientIdentity()
+
+      case 'SET_CLIENT_IDENTITY':
+        return handleSetClientIdentity(message.payload)
+
+      case 'GET_CLIENT_DISGUISE':
+        return handleGetClientDisguise()
+
+      case 'SET_CLIENT_DISGUISE':
+        return handleSetClientDisguise(message.payload)
 
       case 'TEST_PROVIDER':
         return handleTestProvider(message.payload as Provider)
+
+      case 'TEST_MODEL_VIA_ROUTER':
+        return handleTestModelViaRouter(message.payload as RouterModelTestRequest)
 
       case 'UPDATE_TEST_STATUS':
         return handleUpdateTestStatus(message.payload as { id: string; result: TestResult })
@@ -1836,6 +1960,7 @@ async function handleAddProvider(
   provider: Omit<Provider, 'id' | 'createdAt' | 'updatedAt'>
 ): Promise<MessageResponse<Provider>> {
   const newProvider = await addProvider(provider)
+  void refreshRulesAfterProviderChange()
   return { success: true, data: newProvider }
 }
 
@@ -1843,13 +1968,83 @@ async function handleUpdateProvider(payload: {
   id: string
   updates: Partial<Provider>
 }): Promise<MessageResponse<Provider>> {
+  if (Object.keys(payload.updates).some(key => !['testStatus', 'balance', 'isActive', 'routerActiveFormats'].includes(key))) {
+    const providers = await getProviders()
+    const current = providers.find(provider => provider.id === payload.id)
+    if (!current) return { success: false, error: 'Provider not found' }
+    if (current.isActive || (['openai', 'anthropic', 'deepseek'] as const).some(format => selectRouterProvider(providers, format)?.id === current.id)) {
+      const routerStatus = await getRouterStatus()
+      const { router_clients } = await chrome.storage.local.get('router_clients')
+      const clients = routerStatus.success && routerStatus.data ? routerStatus.data.clients || {} : router_clients || {}
+      const routerEnabled = (['openai', 'anthropic', 'deepseek'] as const).some(format => clients[format] && selectRouterProvider(providers, format)?.id === current.id)
+      if (routerEnabled && (!routerStatus.success || !routerStatus.data?.running)) return { success: false, error: 'Router service is unavailable; client remains routed' }
+      if (routerEnabled) {
+        const targets = (['openai', 'anthropic', 'deepseek'] as const).filter(format => clients[format] && selectRouterProvider(providers, format)?.id === current.id)
+        if (payload.updates.formatConversionEnabled === false && current.routerActiveFormats?.some(format => format !== (current.format || 'openai'))) {
+          return { success: false, error: 'Select another upstream for the converted entry before disabling conversion' }
+        }
+        for (const targetFormat of targets) {
+          const next = { ...current, ...payload.updates }
+          const routeResult = targetFormat === 'deepseek' && payload.updates.selectedApiType
+            ? await setClientRouting(targetFormat, true, next)
+            : await updateLocalRouterProvider(next, targetFormat)
+          if (!routeResult.success) {
+            return { success: false, error: routeResult.error || 'Router provider update failed' }
+          }
+        }
+      } else if (current.isActive) {
+        const { sync_enabled } = await chrome.storage.local.get('sync_enabled')
+        if (sync_enabled !== false) {
+          const next = { ...current, ...payload.updates }
+          const syncResult = next.format === 'anthropic'
+            ? await updateClaudeSettingsForProvider(next)
+            : next.format === 'deepseek'
+              ? await updateDeepSeekHarnessConfig(next)
+              : await updateCodexSystemForProvider(next)
+          if (!syncResult.success) return { success: false, error: syncResult.error || 'Config sync failed' }
+        }
+      }
+    }
+  }
   const updated = await updateProvider(payload.id, payload.updates)
   if (!updated) return { success: false, error: 'Provider not found' }
+  void refreshRulesAfterProviderChange()
   return { success: true, data: updated }
 }
 
+async function refreshRulesAfterProviderChange(): Promise<void> {
+  try {
+    await refreshClientIdentity()
+  } catch (error) {
+    console.warn('Client identity provider refresh failed', error)
+  }
+}
+
 async function handleDeleteProvider(id: string): Promise<MessageResponse> {
+  const providers = await getProviders()
+  const selectedFormats = (['openai', 'anthropic', 'deepseek'] as const)
+    .filter(format => selectRouterProvider(providers, format)?.id === id)
+  if (selectedFormats.length > 0) {
+    const status = await getRouterStatus()
+    let clients: Partial<Record<Provider['format'], boolean>>
+    if (status.success && status.data) {
+      // A running service or remembered upstream is not an active client route.
+      // Live empty clients also take precedence over stale extension switches.
+      clients = status.data.enabled ? status.data.clients || {} : {}
+    } else {
+      const { router_enabled, router_clients } = await chrome.storage.local.get(['router_enabled', 'router_clients'])
+      if (router_enabled === true && (!router_clients || typeof router_clients !== 'object' || Array.isArray(router_clients))) {
+        return { success: false, error: 'Router client routing state is unavailable; reconnect the Native Host and retry deletion' }
+      }
+      clients = router_enabled === true ? router_clients : {}
+    }
+    const routedFormats = selectedFormats.filter(format => clients[format] === true)
+    if (routedFormats.length > 0) {
+      return { success: false, error: `Select another upstream or turn off client routing before deleting a provider used by ${routedFormats.join(', ')}` }
+    }
+  }
   await deleteProvider(id)
+  void refreshRulesAfterProviderChange()
   return { success: true }
 }
 
@@ -1863,30 +2058,146 @@ async function handleReorderSites(orderedIds: string[]): Promise<MessageResponse
   return { success: true }
 }
 
-async function handleSetActiveProvider(payload: { id: string; sync?: boolean }): Promise<MessageResponse> {
+async function handleSetActiveProvider(payload: { id: string; sync?: boolean; targetFormat?: Provider['format'] }): Promise<MessageResponse> {
   const { id, sync = true } = payload
-  await setActiveProvider(id)
+  const providers = await getProviders()
+  const current = providers.find(p => p.id === id)
+  if (!current) return { success: false, error: 'Provider not found' }
+  const targetFormat = payload.targetFormat || current.format || 'openai'
+
+  const routerStatus = await getRouterStatus()
+  const stored = await chrome.storage.local.get('router_clients')
+  const clientRouted = routerStatus.success && routerStatus.data
+    ? routerStatus.data.clients?.[targetFormat] === true
+    : stored.router_clients?.[targetFormat] === true
+  if (clientRouted && (!routerStatus.success || !routerStatus.data?.running)) return { success: false, error: 'Router service is unavailable; client remains routed' }
+  if (routerStatus.success && routerStatus.data) {
+    const routerStorage: Record<string, unknown> = {
+      router_enabled: routerStatus.data.enabled,
+      router_clients: routerStatus.data.clients || {},
+      router_port: routerStatus.data.port || 15721,
+    }
+    if (typeof routerStatus.data.proxyUrl === 'string') routerStorage.routerProxy = routerStatus.data.proxyUrl
+    await chrome.storage.local.set(routerStorage)
+  }
+  const routerRunning = routerStatus.success && routerStatus.data?.running === true
+  const converted = targetFormat !== (current.format || 'openai')
+  // One effective selection per target format: converted entries require that
+  // client's routing switch; direct cards sync the local client config instead.
+  if (converted && !clientRouted) {
+    return { success: false, error: routerRunning ? 'Enable client routing for this format before selecting a converted provider' : 'Enable the router before selecting a converted provider' }
+  }
+  const routerEnabled = clientRouted
+  if (routerEnabled) {
+    if (!['openai', 'anthropic', 'deepseek'].includes(targetFormat)) return { success: false, error: 'Unsupported router target format' }
+    if (targetFormat !== (current.format || 'openai') && (targetFormat === 'deepseek' || current.format === 'deepseek' || !current.formatConversionEnabled)) {
+      return { success: false, error: 'Format conversion is disabled' }
+    }
+    const routeResult = targetFormat === 'deepseek' ? await setClientRouting(targetFormat, true, current) : await updateLocalRouterProvider(current, targetFormat)
+    if (!routeResult.success) {
+      console.warn('Router provider update failed', routeResult.error)
+      return { success: false, error: routeResult.error || 'Router provider update failed' }
+    }
+    await setRouterActiveProvider(id, targetFormat)
+    if (!converted) await setActiveProvider(id, true)
+    return { success: true }
+  }
+
   if (sync) {
-    const providers = await getProviders()
-    const current = providers.find(p => p.id === id)
-    if (current) {
-      const syncResult = current.format === 'anthropic'
-        ? await updateClaudeSettingsForProvider(current)
+    const syncResult = current.format === 'anthropic'
+      ? await updateClaudeSettingsForProvider(current)
+      : current.format === 'deepseek'
+        ? await updateDeepSeekHarnessConfig(current)
         : await updateCodexSystemForProvider(current)
-      if (!syncResult.success) {
-        console.warn('Config sync failed', syncResult.error)
-        return { success: false, error: syncResult.error || 'Config sync failed' }
-      }
+    if (!syncResult.success) {
+      console.warn('Config sync failed', syncResult.error)
+      return { success: false, error: syncResult.error || 'Config sync failed' }
     }
   }
+  await setActiveProvider(id)
   return { success: true }
+}
+
+async function handleGetRouterStatus(): Promise<MessageResponse> {
+  const result = await getRouterStatus()
+  if (result.success && result.data) {
+    const routerStorage: Record<string, unknown> = {
+      router_enabled: result.data.enabled,
+      router_clients: result.data.clients || {},
+      router_port: result.data.port || 15721,
+    }
+    if (typeof result.data.proxyUrl === 'string') routerStorage.routerProxy = result.data.proxyUrl
+    await chrome.storage.local.set(routerStorage)
+  }
+  return result
+}
+
+async function handleEnableRouter(payload: { port: number; proxyUrl?: string }): Promise<MessageResponse> {
+  const providers = await getProviders()
+  const routes: Partial<Record<Provider['format'], Provider>> = {}
+  for (const format of ['openai', 'anthropic', 'deepseek'] as const) {
+    const selected = selectRouterProvider(providers, format)
+    if (selected) routes[format] = selected
+  }
+  const current = routes.openai || routes.anthropic || routes.deepseek
+  const result = await enableLocalRouter(current, payload.port, payload.proxyUrl || '', routes)
+  if (result.success) {
+    await chrome.storage.local.set({ router_enabled: true, router_port: payload.port, routerProxy: payload.proxyUrl || '' })
+  }
+  return result
+}
+
+async function handleUpdateRouterSettings(payload: { port: number; proxyUrl?: string }): Promise<MessageResponse> {
+  const result = await updateLocalRouterSettings(payload.port, payload.proxyUrl || '')
+  if (result.success) {
+    await chrome.storage.local.set({
+      router_enabled: true,
+      router_port: result.data?.port || payload.port,
+      routerProxy: result.data?.proxyUrl || payload.proxyUrl || '',
+    })
+  }
+  return result
+}
+
+async function handleSetClientRouting(payload: { format: Provider['format']; enabled: boolean }): Promise<MessageResponse> {
+  const providers = await getProviders()
+  const status = await getRouterStatus()
+  if (!status.success || !status.data) return { success: false, error: status.error || 'Router status unavailable' }
+  if (payload.enabled && !status.data.running) return { success: false, error: 'Router service is not running' }
+  const provider = payload.enabled ? selectRouterProvider(providers, payload.format) : providers.find(p => p.isActive && p.format === payload.format)
+  if (!provider) return { success: false, error: `Select a native ${payload.format} provider first` }
+  const result = await setClientRouting(payload.format, payload.enabled, provider)
+  if (result.success) {
+    await chrome.storage.local.set({ router_clients: result.data?.clients || { ...status.data.clients, [payload.format]: payload.enabled } })
+    if (payload.enabled) await setRouterEffectiveProvider(provider.id, payload.format)
+  }
+  return result
+}
+
+async function handleDisableRouter(): Promise<MessageResponse> {
+  const status = await getRouterStatus()
+  if (!status.success || !status.data) return { success: false, error: status.error || 'Router status unavailable' }
+  for (const format of ['openai', 'anthropic', 'deepseek'] as const) {
+    if (!status.data.clients?.[format]) continue
+    const result = await handleSetClientRouting({ format, enabled: false })
+    if (!result.success) return result
+  }
+  const result = await disableLocalRouter()
+  if (result.success) await chrome.storage.local.set({ router_enabled: false, router_clients: {} })
+  return result
+}
+
+async function handleTestModelViaRouter(provider: RouterModelTestRequest): Promise<MessageResponse<TestResult>> {
+  if (!provider.model?.trim()) return { success: false, error: '请先选择模型再测试' }
+  const { routerProxy } = await chrome.storage.local.get('routerProxy')
+  return testModelViaRouter(provider, typeof routerProxy === 'string' ? routerProxy : '', provider.targetFormat)
 }
 
 async function handleTestProvider(provider: Provider): Promise<MessageResponse<TestResult>> {
   if (!provider.model) {
     return { success: false, error: '请先选择模型再测试' }
   }
-  const result = await testProviderConnection(provider.baseUrl, provider.apiKey, provider.model, provider.apiType || 'both', provider.format || 'openai')
+  const result = await testProviderConnection(provider.baseUrl, provider.apiKey, provider.model, provider.models?.find(model => model.name === provider.model)?.apiType || provider.apiType || defaultApiTypeForFormat(provider.format || 'openai'), provider.format || 'openai')
 
   await updateProvider(provider.id, {
     testStatus: {
@@ -3079,7 +3390,6 @@ async function handleFetchSiteBalance(payload: { url: string; accessToken?: stri
 async function handleRefreshAllBalances(): Promise<MessageResponse> {
   try {
     const sites = await getSites()
-    const providers = await getProviders()
 
     for (const site of sites) {
       if (!site.accessToken && !site.cookie) continue
@@ -3111,134 +3421,6 @@ const ALREADY_CHECKED_SNIPPETS = ['今天已经签到', '已经签到', '已签�
 function isAlreadyCheckedMessage(message: string): boolean {
   const lower = message.toLowerCase()
   return ALREADY_CHECKED_SNIPPETS.some(s => lower.includes(s.toLowerCase()))
-}
-
-async function turnstileAssistedCheckin(
-  siteUrl: string,
-  compatHeaders: Record<string, string>,
-  _userId: string | undefined,
-): Promise<TestResult | null> {
-  const url = new URL(siteUrl)
-  const checkinPageUrl = `${url.origin}/checkin`
-
-  try {
-    let tab: chrome.tabs.Tab | null = null
-    let createdTabId: number | null = null
-
-    const existingTabs = await chrome.tabs.query({ url: `${url.origin}/*` })
-    if (existingTabs.length > 0 && existingTabs[0].id) {
-      tab = existingTabs[0]
-    } else {
-      tab = await chrome.tabs.create({ url: checkinPageUrl, active: false })
-      if (!tab.id) return null
-      createdTabId = tab.id
-      await new Promise<void>((resolve) => {
-        const timeout = setTimeout(resolve, 15000)
-        const listener = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
-          if (tabId === createdTabId && info.status === 'complete') {
-            clearTimeout(timeout)
-            chrome.tabs.onUpdated.removeListener(listener)
-            resolve()
-          }
-        }
-        chrome.tabs.onUpdated.addListener(listener)
-      })
-      await new Promise<void>((resolve) => setTimeout(resolve, 2000))
-    }
-
-    const tabId = tab.id!
-    try {
-      const turnstileToken = await chrome.scripting.executeScript({
-        target: { tabId },
-        world: 'MAIN',
-        func: () => {
-          return new Promise<string | null>((resolve) => {
-            const timeout = setTimeout(() => resolve(null), 15000)
-            const tryGetToken = () => {
-              const input = document.querySelector<HTMLInputElement>('[name="cf-turnstile-response"]')
-              if (input && input.value) {
-                clearTimeout(timeout)
-                resolve(input.value)
-                return
-              }
-              const iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]')
-              if (!iframe) {
-                const btn = document.querySelector<HTMLButtonElement>('button[type="submit"], .checkin-btn, #checkin-btn')
-                if (btn) btn.click()
-              }
-            }
-            tryGetToken()
-            const interval = setInterval(() => {
-              tryGetToken()
-            }, 1000)
-            const origResolve = resolve
-            resolve = ((value: string | null) => {
-              clearInterval(interval)
-              origResolve(value)
-            }) as typeof resolve
-          })
-        },
-      })
-
-      const token = turnstileToken?.[0]?.result
-      console.log('[turnstile] Token obtained:', token ? `${token.slice(0, 20)}...` : 'null')
-
-      if (!token) {
-        console.log('[turnstile] No token obtained, trying direct checkin in page context')
-      }
-
-      const checkinWithToken = await chrome.scripting.executeScript({
-        target: { tabId },
-        world: 'MAIN',
-        func: (fetchUrl: string, headers: Record<string, string>, turnstileToken: string | null) => {
-          const h: Record<string, string> = { ...headers }
-          if (turnstileToken) {
-            h['cf-turnstile-response'] = turnstileToken
-          }
-          return fetch(fetchUrl, {
-            method: 'POST',
-            headers: h,
-            body: '{}',
-            credentials: 'include',
-          }).then(async (res) => {
-            const text = await res.text()
-            let data: any = null
-            try { data = JSON.parse(text) } catch {}
-            return { ok: res.ok, status: res.status, data }
-          }).catch((err: any) => ({ error: `Fetch failed: ${err?.message || String(err)}` }))
-        },
-        args: [`${url.origin}/api/user/checkin`, compatHeaders, token || null],
-      })
-
-      const result = checkinWithToken?.[0]?.result
-      if (result && 'ok' in result) {
-        const parsed: { success?: boolean; message?: string } = result.data || {}
-        const message = parsed.message || ''
-        const isSuccess = parsed.success === true || isAlreadyCheckedMessage(message)
-        const isAlreadyChecked = isAlreadyCheckedMessage(message)
-
-        if (isSuccess) {
-          sessionRefreshCooldown.delete(new URL(siteUrl).origin)
-        }
-        return {
-          success: isSuccess,
-          statusCode: result.status,
-          message: isAlreadyChecked ? 'Already checked in today' : (message || `${result.status}`),
-          error: isSuccess ? undefined : (message || `${result.status}`),
-          responseBody: JSON.stringify(result.data).slice(0, 500),
-        }
-      }
-
-      return null
-    } finally {
-      if (createdTabId) {
-        chrome.tabs.remove(createdTabId).catch(() => {})
-      }
-    }
-  } catch (e) {
-    console.error('[turnstile] Error:', e)
-    return null
-  }
 }
 
 async function handleCheckinSite(payload: { site: Site; manual?: boolean }): Promise<MessageResponse<TestResult>> {

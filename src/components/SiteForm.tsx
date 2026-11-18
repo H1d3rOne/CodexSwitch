@@ -23,7 +23,7 @@ function tryDecodeJwtUserId(token: string): string | null {
 export function SiteForm({ onSave, onCancel, onSyncProvider, initialData }: SiteFormProps) {
   const [name, setName] = useState(initialData?.name || '')
   const [url, setUrl] = useState(initialData?.url || '')
-  const [authType, setAuthType] = useState<SiteAuthType>(initialData?.authType || 'accessToken')
+  const [authType] = useState<SiteAuthType>(initialData?.authType || 'accessToken')
   const [accessToken, setAccessToken] = useState(initialData?.accessToken || '')
   const [refreshToken, setRefreshToken] = useState(initialData?.refreshToken || '')
   const [cookie, setCookie] = useState(initialData?.cookie || '')

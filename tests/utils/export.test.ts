@@ -88,6 +88,25 @@ describe('Export Utility', () => {
     expect(imported).toHaveLength(1)
     expect(imported[0].name).toBe('Imported Provider')
     expect(imported[0].isActive).toBe(false)
+    expect(imported[0].formatConversionEnabled).toBe(false)
+  })
+
+  it.each([true, false])('preserves format conversion set to %s across export and import', formatConversionEnabled => {
+    const exported = exportProviders([{ ...mockProviders[0], formatConversionEnabled }])
+    expect(exported.providers[0].formatConversionEnabled).toBe(formatConversionEnabled)
+    expect(validateExportData(exported).valid).toBe(true)
+    expect(importProviders(exported)[0].formatConversionEnabled).toBe(formatConversionEnabled)
+  })
+
+  it.each(['true', 'false', 1, 0, null, {}])('rejects non-boolean format conversion value %j', formatConversionEnabled => {
+    const exported = exportProviders(mockProviders)
+    const invalid = {
+      ...exported,
+      providers: [{ ...exported.providers[0], formatConversionEnabled }],
+    }
+    const result = validateExportData(invalid)
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Provider 0 formatConversionEnabled must be a boolean if provided')
   })
 
   it('should reject data with wrong version', () => {

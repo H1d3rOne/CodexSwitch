@@ -2,7 +2,23 @@ import type { ApiType, ModelEntry, ProviderFormat } from '../types'
 
 const FORMAT_OPENAI = 'openai'
 const FORMAT_ANTHROPIC = 'anthropic'
+const FORMAT_DEEPSEEK = 'deepseek'
 const FORMAT_AUTO = 'auto'
+
+export function concreteApiTypes(apiType: ApiType): Array<'chat' | 'responses' | 'messages'> {
+  return apiType === 'all' ? ['chat', 'responses', 'messages'] : apiType === 'both' ? ['chat', 'responses'] : [apiType]
+}
+
+export function selectedProtocol(provider: { selectedApiType?: 'chat' | 'responses' | 'messages'; apiType: ApiType; model: string; models?: ModelEntry[] }): 'chat' | 'responses' | 'messages' {
+  const kinds = concreteApiTypes(provider.models?.find(model => model.name === provider.model)?.apiType || provider.apiType)
+  return provider.selectedApiType && kinds.includes(provider.selectedApiType) ? provider.selectedApiType : kinds[0]
+}
+
+export function defaultApiTypeForFormat(format: ProviderFormat): ApiType {
+  if (format === FORMAT_ANTHROPIC) return 'messages'
+  if (format === FORMAT_DEEPSEEK) return 'all'
+  return 'both'
+}
 
 export function normalizeModelEntry(
   model: ModelEntry | string | null | undefined,
@@ -19,7 +35,7 @@ export function normalizeModelEntry(
     apiType = model.apiType || fallbackApiType
     explicitFormat = model.format
   }
-  const format = explicitFormat || getModelFormat(name) || fallbackFormat
+  const format = explicitFormat || (fallbackFormat === 'deepseek' ? fallbackFormat : getModelFormat(name)) || fallbackFormat
   return format ? { name, apiType, format } : { name, apiType }
 }
 
@@ -44,7 +60,7 @@ export function normalizeModelList(
 }
 
 export function filterModelsForFormat(models: ModelEntry[], format: ProviderFormat): ModelEntry[] {
-  return normalizeModelList(models, format === 'anthropic' ? 'chat' : 'both', format)
+  return normalizeModelList(models, defaultApiTypeForFormat(format), format)
     .filter(model => {
       if (model.format) return model.format === format
       const inferredFormat = getModelFormat(model.name)
@@ -80,7 +96,7 @@ export function filterModelNamesForFormat(names: string[], format: ProviderForma
     if (!name || name.toLowerCase() === FORMAT_AUTO) continue
 
     const inferredFormat = getModelFormat(name)
-    if (inferredFormat && inferredFormat !== format) continue
+    if (format !== 'deepseek' && inferredFormat && inferredFormat !== format) continue
 
     const key = name.toLowerCase()
     if (seen.has(key)) continue
@@ -94,7 +110,7 @@ export function filterModelNamesForFormat(names: string[], format: ProviderForma
 export function normalizeGroupModelsForFormat(
   groupModels: Record<string, Array<ModelEntry | string>> | undefined,
   format: ProviderFormat,
-  fallbackApiType: ApiType = format === 'anthropic' ? 'chat' : 'both',
+  fallbackApiType: ApiType = defaultApiTypeForFormat(format),
 ): Record<string, ModelEntry[]> {
   return Object.fromEntries(
     Object.entries(groupModels || { default: [] }).map(([group, models]) => [
@@ -110,6 +126,7 @@ export function normalizeFormatModels(
   return {
     openai: filterModelsForFormat(normalizeModelList(formatModels?.openai, 'both', 'openai'), 'openai'),
     anthropic: filterModelsForFormat(normalizeModelList(formatModels?.anthropic, 'chat', 'anthropic'), 'anthropic'),
+    deepseek: filterModelsForFormat(normalizeModelList(formatModels?.deepseek, 'all', 'deepseek'), 'deepseek'),
   }
 }
 
@@ -119,6 +136,7 @@ export function normalizeFormatGroupModels(
   return {
     openai: normalizeGroupModelsForFormat(formatGroupModels?.openai, 'openai', 'both'),
     anthropic: normalizeGroupModelsForFormat(formatGroupModels?.anthropic, 'anthropic', 'chat'),
+    deepseek: normalizeGroupModelsForFormat(formatGroupModels?.deepseek, 'deepseek', 'all'),
   }
 }
 
@@ -131,16 +149,18 @@ function pushDeduped(target: ModelEntry[], model: ModelEntry) {
 export function splitGroupModelsByFormat(
   groupModels: Record<string, Array<ModelEntry | string>> | undefined,
   fallbackFormat: ProviderFormat,
-  fallbackApiType: ApiType = fallbackFormat === 'anthropic' ? 'chat' : 'both',
+  fallbackApiType: ApiType = defaultApiTypeForFormat(fallbackFormat),
 ): Record<ProviderFormat, Record<string, ModelEntry[]>> {
   const result: Record<ProviderFormat, Record<string, ModelEntry[]>> = {
     openai: {},
     anthropic: {},
+    deepseek: {},
   }
 
   for (const [group, models] of Object.entries(groupModels || { default: [] })) {
     result.openai[group] = result.openai[group] || []
     result.anthropic[group] = result.anthropic[group] || []
+    result.deepseek[group] = result.deepseek[group] || []
 
     for (const rawModel of models || []) {
       const model = normalizeModelEntry(rawModel, fallbackApiType, fallbackFormat)
@@ -152,6 +172,7 @@ export function splitGroupModelsByFormat(
 
   if (!result.openai.default) result.openai.default = []
   if (!result.anthropic.default) result.anthropic.default = []
+  if (!result.deepseek.default) result.deepseek.default = []
 
   return result
 }

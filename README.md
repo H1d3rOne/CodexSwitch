@@ -12,6 +12,7 @@
 - **连接测试** - 测试 API 连接是否正常，支持批量测试
 - **AI 聊天** - 内置聊天界面，快速测试 API 响应
 - **配置同步** - 通过 Native Messaging 同步配置到 `~/.codex/config.toml` 和 `~/.codex/auth.json`
+- **本机 API Router** - 将 Codex / Claude Code 请求经本机回环地址转发到当前 Provider，切换 Provider 时保持客户端使用 Router 地址、令牌及模型别名
 - **导入导出** - 支持供应商配置的导入导出
 
 ### 站点管理
@@ -125,6 +126,24 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 点击供应商卡片即可设为当前使用的供应商。开启 **同步** 开关后，会自动同步到 Codex CLI 配置。
 
+### 本机 API Router
+
+DeepSeek 是独立客户端类型，不与其他分组生成派生卡片；自身启用路由即可使用 API 协议转换。模型能力支持 `both`（Chat + Responses）及 `all`（再加 Messages），卡片下拉展开成模型与具体协议组合。`selectedApiType` 独立保存具体协议，同模型切换协议也同步 Harness；Harness 配置不写 `both/all`。切换选项卡不写配置，顶部按当前客户端显示有效 Provider、模型、具体协议及直连/路由状态。Harness 配置写入 `~/.dsh/profiles/desktop/cordis.patch.yml`（可用 `DSH_HOME` / `profile` 覆盖）与 `~/.dsh/.credentials.yaml`：只维护 `llm-pi-ai` 插件下的**第一个** provider，切换启用 Provider 时原地改写它的 `displayName` / `api` / `baseURL` / `apiKeyEnv` / `models`，并同步 `agent-default-model`；开启 DeepSeek 路由时该项改名为 `router`、指向 `http://127.0.0.1:<端口>/deepseek`、密钥指向本机令牌 `CODEXSWITCH_ROUTER_KEY`、模型为 `router`，关闭后写回启用 Provider 的直连参数。旧版本生成的多协议条目会被清理。
+
+Provider 新增/编辑表单的模型 **Test** 区域提供独立的 **Test via router** 开关，默认关闭。关闭时仍由浏览器直连测试；开启时使用表单当前模型及 URL、API Key，通过临时本机 Router 测试所选接口。原生接口返回 200 时直通；Responses 或 Messages 返回非 200 时，转换请求为 Chat Completions 重试，再将成功响应转换回原格式。Chat 接口自身失败不反向尝试其他接口；Both 会分别测试 Chat 和 Responses。结果会标明 Chat 转换及原生状态码，可展开查看两次响应。该开关仅用于本次表单模型测试，不保存为 Provider 配置、不影响批量测试或插件聊天，也不启停全局 Router、切换当前 Provider 或修改 Codex/Claude Code 配置。需安装 Native Host，并使用已保存的 Router 上游代理设置；无需先开启全局 Router。
+
+Provider 首页右下角的 **路由设置** 提供服务开关、监听端口及上游代理。服务启动无需选择 Provider，且不会修改客户端配置。各 OpenAI/Codex、Anthropic、DeepSeek 选项卡的 **使用路由** 独立控制对应客户端；必须先启动服务并选择 Provider。启用仅备份和按字段修改该客户端，关闭则写回该类型已选原生 Provider 的直连配置，未选择原生 Provider 时明确报错。关闭服务前会提示受影响客户端，逐类切回直连，全部成功才停服；部分失败时服务继续运行，已完成及未完成客户端状态分别保留。异常不会静默直连。
+
+每个原生 Provider 卡片及新增/编辑表单提供独立的 **格式转换** 开关，默认关闭，旧配置未提供该字段时也保持关闭。开启后，该 Provider 可经 Router 提供 Chat Completions、Responses、Messages 全部三种格式，并在另一种格式的水平选项卡中显示标有 **Router** 的入口：OpenAI Provider 出现在 Anthropic 中，Anthropic Provider 出现在 OpenAI 中。派生入口使用目标格式及对应模型类型：Anthropic 入口的 Format 为 `anthropic`，模型显示 `messages`；OpenAI 入口的 Format 为 `openai`，模型类型为 `both`（Chat Completions / Responses），包括所有模型分组。点击派生入口的编辑按钮会显示只读目标格式视图，通过 **编辑原生 Provider** 修改上游配置。入口绑定原始 Provider ID，不创建配置副本、不修改上游 `format` / `apiType`；模型切换和原生配置编辑同步反映到两个选项卡，复制与分享仍使用原生配置。删除 Router 派生入口只会关闭原 Provider 的格式转换，保留原配置、模型及分组；删除原生 Provider 才会同时移除其 Router 入口。批量删除同样按当前选项卡中的入口类型分别处理；操作失败会保留失败项，不会改为删除原配置。关闭格式转换后移除派生入口，Router 只透传该 Provider 声明的原生协议，不做跨格式转换或失败回退。开关会保存并参与导入、导出和复制，与模型测试专用的 **Test via router** 开关互不影响。
+
+格式转换开关不会自动开启全局 Router。Router 关闭或服务不可用时，派生入口仍显示但不能激活；使用前需开启全局 Router 并确认服务运行。Codex 与 Claude Code 分别使用 OpenAI 与 Anthropic 路由，可独立选择上游。各格式的原生 Provider 选择互不影响；转换生成的 Router 入口拥有目标格式自己的选择状态，选中它不会选中或取消原 Provider，切换原 Provider 也不会改变另一格式已选中的 Router 入口。同一目标格式的实际路由以最后点击的原生或转换入口为准，并在关闭、重新开启 Router 后保留；原生与转换入口各自的历史选择仍独立保存。仅旧数据缺少有效路由标记时，才按已有转换选择、原生选择依次回退；无选择时显示空状态。正在使用的上游不能直接删除，应先切换对应路由；正在使用的转换入口也不能直接关闭。活跃 Provider 的格式转换开关会立即同步到运行中的 Router，无需重启服务。
+
+**Router 入口模型测试**始终通过临时 Router 请求目标接口：Anthropic 入口测试 Messages，OpenAI 入口分别测试 Chat Completions 和 Responses，展示转换后的响应及实际上游协议；上游配置仍保留原生 `format` / `apiType`。卡片测试、只读面板中的模型测试以及当前选项卡的 **Test All** 都遵循该规则；Test All 仍对全部原生 Provider 各测试一次，当前选项卡有 Router 入口时使用该入口，否则使用原生入口。测试不要求开启全局 Router，也不修改客户端配置。若提示 Native Host 未测试请求的目标格式，请更新或重新安装 Native Host，不能把旧 Host 返回的原接口结果当作转换测试结果。
+
+Router 对外提供三种入口：`/v1/chat/completions`、`/v1/responses` 和 `/v1/messages`，兼容 OpenAI/Anthropic 协议、Codex 和 Claude Code；插件内置聊天仍由浏览器直连。**开启该 Provider 的格式转换时**，请求会按上游能力转换：OpenAI Provider 使用 Chat Completions（`apiType=responses` 时使用 Responses），Anthropic Provider 使用 Messages；响应转换回客户端入口协议。`apiType=both` 优先使用客户端原生协议，验证失败后尝试另一种协议。只有 Chat Completions 的 Provider 选择 `chat` 时，Responses/Messages 都经 Chat 转换；选择 `both` 时，原生 Responses 验证失败后经 Chat 转换，成功回退的客户端正文不会混入原生错误。支持普通 JSON 和 SSE 流式响应，文本、图像、函数工具调用、常用参数、`tool_choice`、usage 和结束原因会尽量映射。关闭格式转换时，OpenAI `chat` 只允许 Chat Completions，`responses` 只允许 Responses，`both` 允许这两种原生接口，Anthropic 只允许 Messages；其他入口返回明确错误。协议之间不是无损兼容：Responses 的后台/持久化响应、`previous_response_id` 状态续接及各协议专属推理字段不保证可用；没有对应字段的参数会忽略或降级。内置 `web_search` 转为 Anthropic Messages 时会映射为带版本号的服务端工具，转为 Chat 时会移除；`custom` 等无法表达的 freeform 工具也会移除。Router 会将 JSON 请求体中的 `model` 替换为当前 Provider 模型。代理配置作用于 Router 到上游的连接，支持 HTTP/HTTPS 代理及代理 URL 中的 Basic 认证，不会使用浏览器扩展代理。需要安装并运行 Native Host，且监听端口不能被其他程序占用。端口在 Router 运行时修改会自动重启 Router。
+
+升级后先运行构建并在扩展管理页重新加载扩展，再同步安装 Native Host 脚本并在空闲时重启 Router，以加载新代码；通常无需重启 Chrome。此后切换 Provider 的格式转换开关无需再次重启 Router。
+
 ### 测试连接
 
 - **单个测试** - 点击供应商卡片右侧的测试按钮
@@ -169,6 +188,8 @@ base_url = "https://api.openai.com"
   "OPENAI_API_KEY": "sk-..."
 }
 ```
+
+客户端启用路由时，Codex base URL 为 `http://127.0.0.1:<端口>/openai/v1`，Claude 为 `http://127.0.0.1:<端口>/anthropic`，DeepSeek Harness 的 OpenAI 协议为 `/deepseek/v1`，Messages 协议为 `/deepseek`（SDK 追加 `/v1/messages`）。三者独立上游，不会因协议相同而互相覆盖。客户端使用本机令牌及模型别名 `router`，实际模型在转发时替换。关闭客户端路由按字段恢复当前原生选择直连，保留无关配置；`~/.codexswitch/` 保存状态、备份和可复用本机令牌。
 
 ## 卸载
 

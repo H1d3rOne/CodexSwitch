@@ -47,4 +47,22 @@ describe('model format helpers', () => {
     expect(split.openai.default.map(m => m.name)).toEqual(['gpt-4.1'])
     expect(split.anthropic.default.map(m => m.name)).toEqual(['claude-3-5-sonnet-20241022'])
   })
+
+  it('keeps DeepSeek models in the DeepSeek format with all API types', () => {
+    const models = normalizeModelList(['deepseek-chat', 'deepseek-reasoner'], 'all', 'deepseek')
+
+    expect(models).toEqual([
+      { name: 'deepseek-chat', apiType: 'all', format: 'deepseek' },
+      { name: 'deepseek-reasoner', apiType: 'all', format: 'deepseek' },
+    ])
+    expect(filterModelsForFormat(models, 'deepseek')).toEqual(models)
+  })
+
+  it('does not reclassify a legacy OpenAI provider by a DeepSeek model name', () => {
+    const models = normalizeModelList(['deepseek-chat'], 'both', 'openai')
+
+    expect(filterModelsForFormat(models, 'openai')).toEqual([
+      { name: 'deepseek-chat', apiType: 'both', format: 'openai' },
+    ])
+  })
 })

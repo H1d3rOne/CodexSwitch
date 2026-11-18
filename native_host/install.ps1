@@ -16,6 +16,8 @@ if (-not $ExtensionId) {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $windowsDir = Join-Path $scriptDir 'windows'
 $hostScript = Join-Path $scriptDir 'codex_config_host.cjs'
+$routerScript = Join-Path $scriptDir 'codexswitch_router.cjs'
+$deepseekScript = Join-Path $scriptDir 'deepseek_config.cjs'
 $launcherSourcePath = Join-Path $windowsDir 'CodexConfigHostLauncher.cs'
 $launcherPath = Join-Path $windowsDir 'codex_config_host_launcher.exe'
 $manifestPath = Join-Path $windowsDir 'codex_config_host.json'
@@ -43,6 +45,14 @@ if (-not (Test-Path $launcherSourcePath)) {
 
 if (-not (Test-Path $hostScript)) {
     throw "未找到 host 脚本: $hostScript"
+}
+
+if (-not (Test-Path $routerScript)) {
+    throw "未找到 router 脚本: $routerScript"
+}
+
+if (-not (Test-Path $deepseekScript)) {
+    throw "未找到 DeepSeek Harness 配置模块: $deepseekScript，请先运行 npm run build:native"
 }
 
 Set-Content -Path $nodePathFile -Value $NodePath -Encoding UTF8
@@ -73,4 +83,5 @@ Write-Host "Manifest: $manifestPath"
 Write-Host "Registry: $registryPath"
 Write-Host "Node: $NodePath"
 Write-Host "Host Script: $hostScript"
+Write-Host "Router Script: $routerScript"
 Write-Host "Launcher: $launcherPath"

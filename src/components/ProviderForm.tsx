@@ -1,5 +1,45 @@
 import React, { useState, useEffect } from 'react'
+import { decodeBase64ApiKey } from '../utils/apiKey'
 import type { Provider, ApiType, ModelEntry, ProviderFormat } from '../types'
+
+const FORMAT_DEFAULTS: Record<ProviderFormat, { baseUrl: string; model: string; apiType: ApiType }> = {
+  openai: {
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-3.5-turbo',
+    apiType: 'both',
+  },
+  anthropic: {
+    baseUrl: 'https://api.anthropic.com',
+    model: 'claude-sonnet-4-20250514',
+    apiType: 'chat',
+  },
+  deepseek: {
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+    apiType: 'all',
+  },
+}
+
+function getDefaultApiType(format: ProviderFormat): ApiType {
+  return FORMAT_DEFAULTS[format].apiType
+}
+
+function getApiTypeOptions(format: ProviderFormat): ApiType[] {
+  if (format === 'deepseek') return ['chat', 'responses', 'messages', 'all']
+  if (format === 'anthropic') return ['messages']
+  return ['chat', 'responses', 'both']
+}
+
+function apiTypeLabel(apiType: ApiType): string {
+  return apiType === 'both' ? 'Both' : apiType.charAt(0).toUpperCase() + apiType.slice(1)
+}
+
+function formatModelEntries(entries: ModelEntry[] | undefined, format: ProviderFormat): ModelEntry[] {
+  return (entries || []).map(entry => ({
+    ...entry,
+    format: entry.format || format,
+  }))
+}
 
 interface ProviderFormProps {
   provider?: Provider
@@ -8,29 +48,30 @@ interface ProviderFormProps {
 }
 
 export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) {
+  const initialFormat = provider?.format || 'openai'
   const [name, setName] = useState(provider?.name || '')
-  const [baseUrl, setBaseUrl] = useState(provider?.baseUrl || '')
+  const [baseUrl, setBaseUrl] = useState(provider?.baseUrl || FORMAT_DEFAULTS[initialFormat].baseUrl)
   const [apiKey, setApiKey] = useState(provider?.apiKey || '')
-  const [model, setModel] = useState(provider?.model || 'gpt-3.5-turbo')
-  const [models, setModels] = useState<ModelEntry[]>(provider?.models || [])
+  const [model, setModel] = useState(provider?.model || FORMAT_DEFAULTS[initialFormat].model)
+  const [models, setModels] = useState<ModelEntry[]>(formatModelEntries(provider?.models, initialFormat))
   const [newModel, setNewModel] = useState('')
-  const [newModelApiType, setNewModelApiType] = useState<ApiType>('both')
-  const [apiType, setApiType] = useState<ApiType>(provider?.apiType || 'both')
-  const [format, setFormat] = useState<ProviderFormat>(provider?.format || 'openai')
+  const [newModelApiType, setNewModelApiType] = useState<ApiType>(getDefaultApiType(initialFormat))
+  const [apiType, setApiType] = useState<ApiType>(provider?.apiType || getDefaultApiType(initialFormat))
+  const [format, setFormat] = useState<ProviderFormat>(initialFormat)
   const [showApiKey, setShowApiKey] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState('')
 
   useEffect(() => {
-    if (provider) {
-      setName(provider.name)
-      setBaseUrl(provider.baseUrl)
-      setApiKey(provider.apiKey)
-      setModel(provider.model)
-      setModels(provider.models || [])
-      setApiType(provider.apiType || 'both')
-      setFormat(provider.format || 'openai')
-    }
+    const nextFormat = provider?.format || 'openai'
+    setName(provider?.name || '')
+    setBaseUrl(provider?.baseUrl || FORMAT_DEFAULTS[nextFormat].baseUrl)
+    setApiKey(provider?.apiKey || '')
+    setModel(provider?.model || FORMAT_DEFAULTS[nextFormat].model)
+    setModels(formatModelEntries(provider?.models, nextFormat))
+    setApiType(provider?.apiType || getDefaultApiType(nextFormat))
+    setNewModelApiType(getDefaultApiType(nextFormat))
+    setFormat(nextFormat)
   }, [provider])
 
   const handleQuickImport = async () => {
@@ -148,12 +189,26 @@ export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) 
     }
   }
 
+  const handleFormatChange = (nextFormat: ProviderFormat) => {
+    const previousDefaults = FORMAT_DEFAULTS[format]
+    const nextDefaults = FORMAT_DEFAULTS[nextFormat]
+
+    setFormat(nextFormat)
+    setApiType(getDefaultApiType(nextFormat))
+    setNewModelApiType(getDefaultApiType(nextFormat))
+
+    // Keep custom values when editing, but update values that are empty or still
+    // using the previous format's defaults.
+    if (!baseUrl.trim() || baseUrl === previousDefaults.baseUrl) setBaseUrl(nextDefaults.baseUrl)
+    if (!model.trim() || model === previousDefaults.model) setModel(nextDefaults.model)
+  }
+
   const addModel = () => {
     const m = newModel.trim()
     if (m && !models.some(x => x.name === m)) {
-      setModels([...models, { name: m, apiType: newModelApiType }])
+      setModels([...models, { name: m, apiType: newModelApiType, format }])
       setNewModel('')
-      setNewModelApiType('both')
+      setNewModelApiType(getDefaultApiType(format))
     }
   }
 
@@ -163,18 +218,24 @@ export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    const savedModels = formatModelEntries(models, format)
     onSave({
       name,
       baseUrl,
       apiKey,
       model,
-      models: models.length > 0 ? models : (model ? [{ name: model, apiType }] : []),
+      models: savedModels.length > 0 ? savedModels : (model ? [{ name: model, apiType, format }] : []),
       apiType,
       format,
       groupApiKeys: provider?.groupApiKeys || {},
       groupModels: provider?.groupModels || {},
       activeGroup: provider?.activeGroup || 'default',
       isActive: provider?.isActive || false,
+      ...(provider?.formatModels ? { formatModels: provider.formatModels } : {}),
+      ...(provider?.formatGroupModels ? { formatGroupModels: provider.formatGroupModels } : {}),
+      ...(provider?.formatConversionEnabled !== undefined ? { formatConversionEnabled: provider.formatConversionEnabled } : {}),
+      ...(provider?.balance !== undefined ? { balance: provider.balance } : {}),
+      ...(provider?.testStatus !== undefined ? { testStatus: provider.testStatus } : {}),
     })
   }
 
@@ -199,12 +260,22 @@ export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) 
         <label className="block text-sm font-medium mb-1">Base URL</label>
         <input type="url" value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
           className="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-          placeholder={format === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'} required />
+          placeholder={FORMAT_DEFAULTS[format].baseUrl} required />
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">API Key</label>
         <div className="relative">
           <input type={showApiKey ? 'text' : 'password'} value={apiKey} onChange={e => setApiKey(e.target.value)}
+            onBlur={e => setApiKey(decodeBase64ApiKey(e.currentTarget.value))}
+            onPaste={e => {
+              const input = e.currentTarget
+              const value = input.value.slice(0, input.selectionStart ?? 0) + e.clipboardData.getData('text') + input.value.slice(input.selectionEnd ?? input.value.length)
+              const decoded = decodeBase64ApiKey(value)
+              if (decoded !== value) {
+                e.preventDefault()
+                setApiKey(decoded)
+              }
+            }}
             className="w-full px-3 py-2 pr-8 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500" required />
           <button type="button" onClick={() => setShowApiKey(!showApiKey)}
             className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
@@ -221,17 +292,23 @@ export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) 
       <div>
         <label className="block text-sm font-medium mb-1">API Format</label>
         <div className="flex gap-2">
-          <button type="button" onClick={() => setFormat('openai')}
+          <button type="button" onClick={() => handleFormatChange('openai')}
             className={`flex-1 px-3 py-2 text-sm rounded border transition-colors ${
               format === 'openai' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}>
             OpenAI
           </button>
-          <button type="button" onClick={() => setFormat('anthropic')}
+          <button type="button" onClick={() => handleFormatChange('anthropic')}
             className={`flex-1 px-3 py-2 text-sm rounded border transition-colors ${
               format === 'anthropic' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}>
             Anthropic
+          </button>
+          <button type="button" onClick={() => handleFormatChange('deepseek')}
+            className={`flex-1 px-3 py-2 text-sm rounded border transition-colors ${
+              format === 'deepseek' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}>
+            DeepSeek
           </button>
         </div>
       </div>
@@ -239,7 +316,7 @@ export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) 
         <label className="block text-sm font-medium mb-1">模型名称</label>
         <input type="text" value={model} onChange={e => setModel(e.target.value)}
           className="w-full px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-          placeholder={format === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-3.5-turbo'} />
+          placeholder={FORMAT_DEFAULTS[format].model} />
       </div>
       <div>
         <label className="block text-sm font-medium mb-1">可用模型列表</label>
@@ -250,9 +327,9 @@ export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) 
             placeholder="添加模型名称" />
           <select value={newModelApiType} onChange={e => setNewModelApiType(e.target.value as ApiType)}
             className="px-2 py-2 text-xs bg-white border rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
-            <option value="chat">Chat</option>
-            <option value="responses">Responses</option>
-            <option value="both">Both</option>
+            {getApiTypeOptions(format).map(type => (
+              <option key={type} value={type}>{apiTypeLabel(type)}</option>
+            ))}
           </select>
           <button type="button" onClick={addModel}
             className="px-3 py-2 bg-slate-100 text-slate-600 rounded hover:bg-slate-200">添加</button>
@@ -262,9 +339,11 @@ export function ProviderForm({ provider, onSave, onCancel }: ProviderFormProps) 
             {models.map(m => (
               <div key={m.name} className="flex items-center gap-1 px-2 py-1 bg-slate-100 rounded text-sm">
                 <span className={`px-1 py-px text-[7px] font-bold uppercase tracking-wider rounded ${
-                  m.apiType === 'both' ? 'bg-purple-50 text-purple-500'
-                    : m.apiType === 'responses' ? 'bg-blue-50 text-blue-500'
-                    : 'bg-amber-50 text-amber-500'
+                  m.apiType === 'all' ? 'bg-violet-50 text-violet-500'
+                    : m.apiType === 'both' ? 'bg-purple-50 text-purple-500'
+                      : m.apiType === 'responses' ? 'bg-blue-50 text-blue-500'
+                        : m.apiType === 'messages' ? 'bg-emerald-50 text-emerald-500'
+                          : 'bg-amber-50 text-amber-500'
                 }`}>{m.apiType}</span>
                 <span className="font-mono text-slate-700">{m.name}</span>
                 <button type="button" onClick={() => removeModel(m.name)}

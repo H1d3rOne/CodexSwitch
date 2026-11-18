@@ -5,6 +5,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_HOST_SCRIPT="$SCRIPT_DIR/codex_config_host.cjs"
+SOURCE_ROUTER_SCRIPT="$SCRIPT_DIR/codexswitch_router.cjs"
 
 echo "=========================================="
 echo "CodexSwitch Native Host 安装程序"
@@ -51,19 +52,24 @@ mkdir -p "$HOST_INSTALL_DIR"
 # macOS 下 Chrome 启动的 native host 读取 ~/Documents 内脚本时可能被 TCC 权限拦截，
 # 造成 Chrome 只看到 "Native host has exited"。
 HOST_SCRIPT="$HOST_INSTALL_DIR/codex_config_host.cjs"
+ROUTER_SCRIPT="$HOST_INSTALL_DIR/codexswitch_router.cjs"
 cp "$SOURCE_HOST_SCRIPT" "$HOST_SCRIPT"
+cp "$SOURCE_ROUTER_SCRIPT" "$ROUTER_SCRIPT"
+cp "$SCRIPT_DIR/deepseek_config.cjs" "$HOST_INSTALL_DIR/deepseek_config.cjs"
 chmod +x "$HOST_SCRIPT"
+chmod +x "$ROUTER_SCRIPT"
 
 # 创建 launcher，避免 Chrome GUI 环境下 PATH 不包含 node
 LAUNCHER_FILE="$MANIFEST_DIR/codex_config_host_launcher.sh"
 cat > "$LAUNCHER_FILE" << EOF_LAUNCHER
 #!/bin/bash
 HOST_SCRIPT="$HOST_SCRIPT"
-LOG_FILE="\$HOME/.codex/codexswitch-native-host.log"
+LOG_DIR="\$HOME/.codex"
+LOG_FILE="\$LOG_DIR/codexswitch-native-host.log"
 
-mkdir -p "\$(dirname "\$LOG_FILE")" 2>/dev/null || true
+mkdir -p "\$LOG_DIR" 2>/dev/null || true
 log() {
-  printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$*" >> "\$LOG_FILE" 2>/dev/null || true
+  printf '[CodexSwitch] %s\\n' "\$*" >> "\$LOG_FILE" 2>/dev/null || true
 }
 
 NODE_CANDIDATES=(
@@ -99,7 +105,7 @@ if command -v node >/dev/null 2>&1; then
   exit "\$status"
 fi
 
-log "Node.js executable not found; please reinstall native_host/install.sh"
+printf '[CodexSwitch] Node.js executable not found; please reinstall native_host/install.sh\\n' >&2
 exit 127
 EOF_LAUNCHER
 chmod +x "$LAUNCHER_FILE"
@@ -124,6 +130,7 @@ echo ""
 echo "清单文件位置: $MANIFEST_FILE"
 echo "Launcher 位置: $LAUNCHER_FILE"
 echo "主机脚本位置: $HOST_SCRIPT"
+echo "路由脚本位置: $ROUTER_SCRIPT"
 echo "Node.js 路径: $NODE_PATH"
 echo "日志文件: ~/.codex/codexswitch-native-host.log"
 echo ""

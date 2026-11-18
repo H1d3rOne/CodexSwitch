@@ -1,5 +1,10 @@
 import type { Provider, ExportData, ApiType } from '../types'
-import { normalizeFormatGroupModels, normalizeGroupModelsForFormat, normalizeModelList } from './modelFormat'
+import {
+  normalizeFormatGroupModels,
+  normalizeFormatModels,
+  normalizeGroupModelsForFormat,
+  normalizeModelList,
+} from './modelFormat'
 
 export function exportProviders(providers: Provider[]): ExportData {
   return {
@@ -11,12 +16,14 @@ export function exportProviders(providers: Provider[]): ExportData {
       apiKey: p.apiKey,
       groupApiKeys: p.groupApiKeys || { default: p.apiKey || '' },
       groupModels: p.groupModels || { default: p.models || [] },
+      formatModels: p.formatModels,
       formatGroupModels: p.formatGroupModels,
       activeGroup: p.activeGroup || 'default',
       model: p.model,
       models: p.models,
-      apiType: p.apiType || 'both',
+      apiType: p.apiType || (p.format === 'anthropic' ? 'chat' : p.format === 'deepseek' ? 'all' : 'both'),
       format: p.format || 'openai',
+      formatConversionEnabled: p.formatConversionEnabled === true,
     })),
   }
 }
@@ -54,6 +61,9 @@ export function validateExportData(data: unknown): {
     if (provider.apiKey !== undefined && typeof provider.apiKey !== 'string') {
       errors.push(`Provider ${index} apiKey must be a string if provided`)
     }
+    if (provider.formatConversionEnabled !== undefined && typeof provider.formatConversionEnabled !== 'boolean') {
+      errors.push(`Provider ${index} formatConversionEnabled must be a boolean if provided`)
+    }
   })
 
   if (errors.length > 0) {
@@ -68,9 +78,12 @@ export function importProviders(data: ExportData): Array<Omit<Provider, 'id' | '
     const groupApiKeys = p.groupApiKeys || { default: p.apiKey || '' }
     const activeGroup = p.activeGroup || 'default'
     const format = p.format || 'openai'
-    const fallbackApiType = format === 'anthropic' ? 'chat' : ((p.apiType || 'both') as ApiType)
+    const fallbackApiType = (p.apiType || (
+      format === 'anthropic' ? 'chat' : format === 'deepseek' ? 'all' : 'both'
+    )) as ApiType
     const models = normalizeModelList(p.models || (p.model ? [{ name: p.model, apiType: fallbackApiType, format }] : []), fallbackApiType, format)
     const groupModels = normalizeGroupModelsForFormat(p.groupModels || { default: models }, format, fallbackApiType)
+    const formatModels = normalizeFormatModels(p.formatModels)
     const formatGroupModels = normalizeFormatGroupModels(p.formatGroupModels)
     return {
       name: p.name,
@@ -78,12 +91,14 @@ export function importProviders(data: ExportData): Array<Omit<Provider, 'id' | '
       apiKey: groupApiKeys[activeGroup] || p.apiKey || '',
       groupApiKeys,
       groupModels,
+      formatModels,
       formatGroupModels,
       activeGroup,
       model: models.some(m => m.name === p.model) ? p.model : (models[0]?.name || ''),
       models,
       apiType: p.apiType || fallbackApiType,
       format,
+      formatConversionEnabled: p.formatConversionEnabled === true,
       isActive: false,
     }
   })

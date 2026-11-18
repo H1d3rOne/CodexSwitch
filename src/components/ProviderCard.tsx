@@ -1,4 +1,3 @@
-import React from 'react'
 import type { Provider } from '../types'
 import { StatusBadge } from './StatusBadge'
 

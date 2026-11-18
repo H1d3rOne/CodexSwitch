@@ -7,5 +7,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './tests/setup.ts',
+    // The popup suite renders the whole App repeatedly; parallel files can starve a single test.
+    testTimeout: 20000,
+    hookTimeout: 20000,
   },
 })

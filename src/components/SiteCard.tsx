@@ -1,5 +1,4 @@
-import React from 'react'
-import type { Site, TestStatus, CookieStatus } from '../types'
+import type { Site, TestStatus } from '../types'
 
 interface SiteCardProps {
   site: Site

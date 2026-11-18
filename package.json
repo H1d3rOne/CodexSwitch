@@ -1,18 +1,20 @@
 {
   "name": "codex-switch",
-  "version": "1.0.8",
+  "version": "2.0.0",
   "description": "OpenAI API Provider Manager Chrome Extension",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && vite build --config vite.config.background.ts",
+    "build": "npm run build:native && vite build && vite build --config vite.config.background.ts",
     "test": "vitest",
     "test:ui": "vitest --ui",
-    "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
+    "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "build:native": "esbuild native_host/src/deepseek_config.cjs --bundle --platform=node --format=cjs --outfile=native_host/deepseek_config.cjs"
   },
   "dependencies": {
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.1.5",
@@ -26,6 +28,7 @@
     "@vitejs/plugin-react": "^4.2.1",
     "@vitest/ui": "^1.1.0",
     "autoprefixer": "^10.4.16",
+    "esbuild": "^0.25.12",
     "eslint": "^8.55.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
